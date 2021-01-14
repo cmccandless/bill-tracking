@@ -40,7 +40,6 @@ class BillingCycle(str, Enum):
 class Bill:
     name: str
     amount: float
-    variable_amount: bool = False
     cycle: BillingCycle = BillingCycle.Monthly
 
     day: int = 1  # (1-31)
@@ -129,18 +128,6 @@ Transactions = Dict[str, Dict[datetime, float]]
 def get_budget() -> Budget:
     with budget_file.open() as f:
         return Budget(**yaml.load(f, Loader=yaml.SafeLoader))
-
-
-# def get_transactions() -> Transactions:
-#     if not transactions_file.is_file():
-#         return {}
-#     with transactions_file.open() as f:
-#         return Transactions(**yaml.load(f, loader=yaml.SafeLoader))
-
-
-# def save_transactions(transactions: Transactions):
-#     with transactions_file.open('w') as f:
-#         yaml.dump(transactions, f)
 
 
 def print_bill_allocations(bills: List[Bill], allocations: List[float]):
