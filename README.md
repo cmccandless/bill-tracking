@@ -1,6 +1,6 @@
 # bill-tracking
 
-1. Fill out new budget.yml (see example_budget.yml)
+1. Fill out new budget.yml (see [example](example_budget.yml))
 2. Run
 ```
 $ ./bill_tracker.py --budget example_budget.yml 2021/01/08 1000
