@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from math import floor
 from pathlib import Path
-from typing import Dict, List
+from typing import List
 import yaml
 
 
@@ -17,13 +17,6 @@ class BillingCycle(str, Enum):
     Monthly = "monthly"
     Yearly = "yearly"
     Weekly = "weekly"
-
-    def to_monthly(self, value):
-        if self.value == "yearly":
-            return round(value / 12, 2)
-        elif self.value == "weekly":
-            return round(value * 52 / 12, 2)
-        return value
 
     @property
     def default_day(self) -> int:
@@ -49,10 +42,6 @@ class Bill:
             self.cycle = BillingCycle(self.cycle)
         if self.day == -1:
             self.day = self.cycle.default_day
-
-    @property
-    def monthly_amount(self) -> float:
-        return self.cycle.to_monthly(self.amount)
 
     def is_due(self, due_date: date) -> bool:
         if self.cycle == BillingCycle.Monthly:
