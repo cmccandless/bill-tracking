@@ -1,31 +1,37 @@
 #!/usr/bin/env python3
+import argparse
 from enum import Enum
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from math import floor
 from pathlib import Path
 from typing import Dict, List
 import yaml
 
 
-budget_file = Path('budget.yml')
-transactions_file = Path('transactions.yml')
+budget_file = Path("budget.yml")
+# transactions_file = Path('transactions.yml')
+
+
+def parse_date(s: str) -> date:
+    return datetime.strptime(s, "%Y/%m/%d").date()
 
 
 class BillingCycle(str, Enum):
-    Monthly = 'monthly'
-    Yearly = 'yearly'
-    Weekly = 'weekly'
+    Monthly = "monthly"
+    Yearly = "yearly"
+    Weekly = "weekly"
 
     def to_monthly(self, value):
-        if self.value == 'yearly':
+        if self.value == "yearly":
             return round(value / 12, 2)
-        elif self.value == 'weekly':
+        elif self.value == "weekly":
             return round(value * 52 / 12, 2)
         return value
 
     @property
     def default_day(self) -> int:
-        if self.value == 'weekly':
+        if self.value == "weekly":
             return 0
         return 1
 
@@ -41,7 +47,7 @@ class Bill:
     weekday: int = 0  # (0-6) (Monday=0)
     month: int = 1  # (1-12)
 
-    notes: str = ''
+    notes: str = ""
 
     def __post_init__(self):
         if isinstance(self.cycle, str):
@@ -68,14 +74,16 @@ class Bill:
             due_date += timedelta(days=1)
         return due_date
 
-    def previous_due_date(self, start_date: date) -> date:
+    def last_due_date(self, start_date: date) -> date:
         due_date = start_date
         while not self.is_due(due_date):
             due_date -= timedelta(days=1)
         return due_date
 
-    def needed_balance(self, on_day: date, last_pay_day: date, pay_period=timedelta(days=14)) -> float:
-        last_payment = self.previous_due_date(on_day)
+    def needed_balance(
+        self, on_day: date, last_pay_day: date, pay_period=timedelta(days=14)
+    ) -> float:
+        last_payment = self.last_due_date(on_day)
         next_payment = self.next_due_date(on_day)
         next_pay_day = last_pay_day + pay_period
         if self.cycle == BillingCycle.Monthly:
@@ -120,70 +128,64 @@ Transactions = Dict[str, Dict[datetime, float]]
 
 def get_budget() -> Budget:
     with budget_file.open() as f:
-        return yaml.load(f, Loader=yaml.SafeLoader)
+        return Budget(**yaml.load(f, Loader=yaml.SafeLoader))
 
 
-def get_transactions() -> Transactions:
-    if not transactions_file.is_file():
-        return {}
-    with transactions_file.open() as f:
-        return yaml.load(f, loader=yaml.SafeLoader)
+# def get_transactions() -> Transactions:
+#     if not transactions_file.is_file():
+#         return {}
+#     with transactions_file.open() as f:
+#         return Transactions(**yaml.load(f, loader=yaml.SafeLoader))
 
 
-def save_transactions(transactions: Transactions):
-    with transactions_file.open('w') as f:
-        yaml.dump(transactions, f)
+# def save_transactions(transactions: Transactions):
+#     with transactions_file.open('w') as f:
+#         yaml.dump(transactions, f)
 
 
-def prompt_missing_transactions(budget: Budget, transactions: Transactions, start_date: date):
-    day = start_date
-    while day <= date.today():
-        for bill in budget.bills:
-            if bill.name not in transactions:
-                transactions[bill.name] = {}
-            if bill.is_due(day) and day not in transactions[bill.name]:
-                if bill.variable_amount:
-                    s = input(f'Billed amount for {bill.name} on {day}: ')
-                    billed_amount = float(s)
-                else:
-                    billed_amount = bill.amount
-                transactions[bill.name] = billed_amount
-        day += timedelta(days=1)
+def print_bill_allocations(bills: List[Bill], allocations: List[float]):
+    def hrule(length):
+        return "".join(["-"] * length)
+
+    yesterday = date.today() - timedelta(days=1)
+    border = "|" + hrule(78) + "|"
+    print(border)
+    print(f'| {"Bill":<41} | Allocated | Total   | Last Paid  |')
+    border_sep = "|".join(["", hrule(43), hrule(11), hrule(9), hrule(12), ""])
+    print(border_sep)
+    for bill, allocated in zip(bills, allocations):
+        last_due = bill.last_due_date(yesterday)
+        print(
+            f"| {bill.name:<41} |   {allocated: 7.2f} | {bill.amount:7.2f} | {last_due} |"
+        )
+    print(border)
 
 
-def get_bills_for_pay_period(budget, start_date) -> List[float]:
-    day = start_date
-    end_date = start_date + timedelta(days=14)
-    upcoming = []
-    while day < end_date:
-        for bill in budget.bills:
-            if bill.is_due(day):
-                upcoming.append(bill.amount)
-    return upcoming
+def get_allowcations(budget: Budget, last_pay_day: date) -> List[float]:
+    yesterday = date.today() - timedelta(days=1)
+    return [bill.needed_balance(yesterday, last_pay_day) for bill in budget.bills]
 
 
-def find_current_margin():
-    budget = get_budget()
-    transactions = get_transactions()
-    prompt_missing_transactions(budget, transactions)
-    save_transactions(transactions)
-    s = input('Current Balance: ')
-    current_balance = float(s)
-    s = input('Last pay day (YY/MM/DD): ')
-    last_pay_day = datetime.strptime(s, '%Y/%m/%d').date()
-    previous_pay_day = last_pay_day - timedelta(days=14)
+def find_current_margin(
+    budget, last_pay_day: date, current_balance: float, round_margin=True
+):
+    allocations = get_allowcations(budget, last_pay_day)
+    total_allocated = sum(allocations)
+    margin = current_balance - total_allocated
+    if round_margin:
+        rounded_margin = floor(margin / 10) * 10
+        return rounded_margin, allocations
+    else:
+        return margin, allocations
 
 
 if __name__ == "__main__":
-    test_yaml = """paycheck: 1234.56
-bills:
-- name: Bill1
-  amount: 10.0
-  cycle: weekly
-  notes: |
-    foo
-    bar
-    baz
-"""
-    budget = Budget(**yaml.load(test_yaml, Loader=yaml.SafeLoader))
-    print(budget.bills[0].monthly_amount)
+    cli = argparse.ArgumentParser()
+    cli.add_argument("last_pay_day", type=parse_date, help="(ex: YYYY/MM/DD)")
+    cli.add_argument("balance", type=float, help="(ex: 1234.56)")
+    opts = cli.parse_args()
+    budget = get_budget()
+    margin, allocations = find_current_margin(budget, opts.last_pay_day, opts.balance)
+    print_bill_allocations(budget.bills, allocations)
+    print(f"Current Balance: {opts.balance:.2f}")
+    print(f"Margin: {margin:.2f}")
