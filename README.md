@@ -1,20 +1,16 @@
 # bill-tracking
 
-1. Fill out new budget.yml. Example:
-```YAML
-paycheck: 1200
-
-bills:
-- name: Rent
-  amount: 600
-- name: HelloFresh
-  amount: 51.92
-  cycle: weekly
-  weekday: 0  # Monday
-- name: Disney+
-  cycle: yearly
-  month: 1
-  day: 25
+1. Fill out new budget.yml (see example_budget.yml)
+2. Run
 ```
-
-2. `./bill_tracker.py 2021/01/08 1234.56`
+$ ./bill_tracker.py --budget example_budget.yml 2021/01/08 1000
+|------------------------------------------------------------------------------|
+| Bill                                      | Allocated | Total   | Last Paid  |
+|-------------------------------------------|-----------|---------|------------|
+| Rent                                      |    300.00 |  600.00 | 2021-01-01 |
+| HelloFresh                                |     51.92 |   51.92 | 2021-01-11 |
+| Disney+                                   |     67.31 |   70.00 | 2020-01-25 |
+|------------------------------------------------------------------------------|
+Current Balance: 1000.00
+Margin: 580.00
+```

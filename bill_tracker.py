@@ -9,10 +9,6 @@ from typing import Dict, List
 import yaml
 
 
-budget_file = Path("budget.yml")
-# transactions_file = Path('transactions.yml')
-
-
 def parse_date(s: str) -> date:
     return datetime.strptime(s, "%Y/%m/%d").date()
 
@@ -121,13 +117,10 @@ class Budget:
             if isinstance(bill, dict):
                 self.bills[i] = Bill(**bill)
 
-
-Transactions = Dict[str, Dict[datetime, float]]
-
-
-def get_budget() -> Budget:
-    with budget_file.open() as f:
-        return Budget(**yaml.load(f, Loader=yaml.SafeLoader))
+    @classmethod
+    def load_from_file(cls, budget_file: Path) -> 'Budget':
+        with budget_file.open() as f:
+            return cls(**yaml.load(f, Loader=yaml.SafeLoader))
 
 
 def print_bill_allocations(bills: List[Bill], allocations: List[float]):
@@ -170,8 +163,9 @@ if __name__ == "__main__":
     cli = argparse.ArgumentParser()
     cli.add_argument("last_pay_day", type=parse_date, help="(ex: YYYY/MM/DD)")
     cli.add_argument("balance", type=float, help="(ex: 1234.56)")
+    cli.add_argument("--budget", type=Path, default=Path('budget.yml'))
     opts = cli.parse_args()
-    budget = get_budget()
+    budget = Budget.load_from_file(opts.budget)
     margin, allocations = find_current_margin(budget, opts.last_pay_day, opts.balance)
     print_bill_allocations(budget.bills, allocations)
     print(f"Current Balance: {opts.balance:.2f}")
