@@ -9,6 +9,9 @@ from typing import List
 import yaml
 
 
+WEEKS_PER_YEAR = 52
+
+
 def parse_date(s: str) -> date:
     return datetime.strptime(s, "%Y/%m/%d").date()
 
@@ -43,6 +46,19 @@ class Bill:
         if self.day == -1:
             self.day = self.cycle.default_day
 
+    def per_paycheck_estimate(self, pay_period):
+        if self.cycle == BillingCycle.Monthly:
+            yearly_amount = self.amount * 12
+        elif self.cycle == BillingCycle.Weekly:
+            yearly_amount = self.amount * WEEKS_PER_YEAR
+        elif self.cycle == BillingCycle.Yearly:
+            yearly_amount = self.amount
+        else:
+            return 0
+        pay_period_weeks = pay_period.days / 7
+        pay_periods_per_year = WEEKS_PER_YEAR / pay_period_weeks
+        return yearly_amount / pay_periods_per_year
+
     def is_due(self, due_date: date) -> bool:
         if self.cycle == BillingCycle.Monthly:
             return self.day == due_date.day
@@ -73,7 +89,8 @@ class Bill:
         if self.cycle == BillingCycle.Monthly:
             if last_payment > last_pay_day:
                 return 0
-            elif (next_payment - last_pay_day) < pay_period:  # due this pay period
+            elif (next_payment - last_pay_day) < pay_period:
+                # due this pay period
                 return self.amount
             else:
                 return round(self.amount / 2, 2)
@@ -98,49 +115,90 @@ class Bill:
 
 @dataclass
 class Budget:
-    paycheck: float
     bills: List[Bill]
+    directdeposit: List[Bill] = None
+    pay_period_days: int = 14
+    minimum_balance: float = 0
 
     def __post_init__(self):
         for i, bill in enumerate(self.bills):
             if isinstance(bill, dict):
                 self.bills[i] = Bill(**bill)
+        if self.directdeposit is None:
+            self.directdeposit = []
+        for i, bill in enumerate(self.directdeposit):
+            if isinstance(bill, dict):
+                self.directdeposit[i] = Bill(**bill)
+
+    @property
+    def pay_period(self) -> timedelta:
+        return timedelta(days=self.pay_period_days)
 
     @classmethod
-    def load_from_file(cls, budget_file: Path) -> 'Budget':
+    def load_from_file(cls, budget_file: Path) -> "Budget":
         with budget_file.open() as f:
             return cls(**yaml.load(f, Loader=yaml.SafeLoader))
 
+    def estimate_paycheck(self, bills_only=False):
+        bill_total = sum(
+            bill.per_paycheck_estimate(self.pay_period) for bill in self.bills
+        )
+        if bills_only:
+            return bill_total
+        return bill_total + sum(b.amount for b in self.directdeposit)
+
+    def estimate_monthly(self, bills_only=False):
+        paychecks_per_year = WEEKS_PER_YEAR / (self.pay_period_days / 7)
+        paychecks_per_month = paychecks_per_year / 12
+        per_paycheck = self.estimate_paycheck(bills_only=bills_only)
+        return per_paycheck * paychecks_per_month
+
+
+def hrule(length):
+    return "".join(["-"] * length)
+
 
 def print_bill_allocations(bills: List[Bill], allocations: List[float]):
-    def hrule(length):
-        return "".join(["-"] * length)
 
-    yesterday = date.today() - timedelta(days=1)
-    border = "|" + hrule(78) + "|"
+    today = date.today()
+    # yesterday = today - timedelta(days=1)
+    border = "|" + hrule(91) + "|"
     print(border)
-    print(f'| {"Bill":<41} | Allocated | Total   | Last Paid  |')
-    border_sep = "|".join(["", hrule(43), hrule(11), hrule(9), hrule(12), ""])
+    print(
+        f'| {"Bill":<41} | Allocated | Total   | {"Last Paid":<10} | '
+        f'{"Next Due":<10} |'
+    )
+    border_sep = "|".join(
+        ["", hrule(43), hrule(11), hrule(9), hrule(12), hrule(12), ""]
+    )
     print(border_sep)
-    for bill, allocated in zip(bills, allocations):
-        last_due = bill.last_due_date(yesterday)
+    bill_info = (
+        (b.name, a, b.amount, b.last_due_date(today), b.next_due_date(today))
+        for b, a in zip(bills, allocations)
+    )
+    bill_info = sorted(bill_info, key=lambda i: i[3], reverse=True)
+    for name, allocated, amount, last_due, next_due in bill_info:
         print(
-            f"| {bill.name:<41} |   {allocated: 7.2f} | {bill.amount:7.2f} | {last_due} |"
+            f"| {name:<41} |   {allocated: 7.2f} | "
+            f"{amount:7.2f} | {last_due} | {next_due} |"
         )
     print(border)
 
 
-def get_allowcations(budget: Budget, last_pay_day: date) -> List[float]:
-    yesterday = date.today() - timedelta(days=1)
-    return [bill.needed_balance(yesterday, last_pay_day) for bill in budget.bills]
+def get_allocations(budget: Budget, last_pay_day: date) -> List[float]:
+    today = date.today()
+    # yesterday = today - timedelta(days=1)
+    return [
+        bill.needed_balance(today, last_pay_day) for bill in budget.bills
+    ]
 
 
 def find_current_margin(
     budget, last_pay_day: date, current_balance: float, round_margin=True
 ):
-    allocations = get_allowcations(budget, last_pay_day)
+    allocations = get_allocations(budget, last_pay_day)
     total_allocated = sum(allocations)
-    margin = current_balance - total_allocated
+    margin = current_balance - budget.minimum_balance - total_allocated
     if round_margin:
         rounded_margin = floor(margin / 10) * 10
         return rounded_margin, allocations
@@ -152,10 +210,30 @@ if __name__ == "__main__":
     cli = argparse.ArgumentParser()
     cli.add_argument("last_pay_day", type=parse_date, help="(ex: YYYY/MM/DD)")
     cli.add_argument("balance", type=float, help="(ex: 1234.56)")
-    cli.add_argument("--budget", type=Path, default=Path('budget.yml'))
+    cli.add_argument("--budget", type=Path, default=Path("budget.yml"))
     opts = cli.parse_args()
     budget = Budget.load_from_file(opts.budget)
-    margin, allocations = find_current_margin(budget, opts.last_pay_day, opts.balance)
+
+    margin, allocations = find_current_margin(
+        budget, opts.last_pay_day, opts.balance
+    )
     print_bill_allocations(budget.bills, allocations)
-    print(f"Current Balance: {opts.balance:.2f}")
-    print(f"Margin: {margin:.2f}")
+
+    monthly_estimate = budget.estimate_monthly(bills_only=True)
+    print(f"Estimated Monthly Expenses: {monthly_estimate:7.2f}")
+    paycheck_estimate = budget.estimate_paycheck(
+        bills_only=False
+    )
+    print(f"Estimated Minimum Paycheck: {paycheck_estimate:7.2f}")
+    print(hrule(93))
+
+    data = [
+        ("+", "Current Balance", opts.balance),
+        ("-", "Minimum Balance", budget.minimum_balance),
+        ("-", "Allocated Total", sum(allocations))
+    ]
+    max_label_length = max(map(lambda d: len(d[1]), data))
+    for prefix, label, value in data:
+        print(f'{label.ljust(max_label_length)}: {prefix or " "}{value:7.2f}')
+    print(hrule(max_label_length + 10))
+    print(f"{'Margin'.ljust(max_label_length)}:  {margin:7.2f}")
