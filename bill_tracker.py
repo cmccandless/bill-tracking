@@ -13,7 +13,7 @@ WEEKS_PER_YEAR = 52
 
 
 def parse_date(s: str) -> date:
-    return datetime.strptime(s, "%Y/%m/%d").date()
+    return datetime.strptime(s.replace('-', '/'), "%Y/%m/%d").date()
 
 
 class BillingCycle(str, Enum):
