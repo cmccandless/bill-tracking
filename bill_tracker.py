@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import List
 import yaml
 
+from tabulate import tabulate
+
 
 WEEKS_PER_YEAR = 52
 
@@ -206,34 +208,37 @@ def find_current_margin(
         return margin, allocations
 
 
+def manual_payment(text):
+    name, amount = text.split('=')
+    return (name, float(amount))
+
+
 if __name__ == "__main__":
     cli = argparse.ArgumentParser()
     cli.add_argument("last_pay_day", type=parse_date, help="(ex: YYYY/MM/DD)")
     cli.add_argument("balance", type=float, help="(ex: 1234.56)")
     cli.add_argument("--budget", type=Path, default=Path("budget.yml"))
+    cli.add_argument("-p", "--paid", action="append", default=[])
     opts = cli.parse_args()
-    budget = Budget.load_from_file(opts.budget)
+    budget = Budget.load_from_file(opts.budget, opts.paid)
 
-    margin, allocations = find_current_margin(
-        budget, opts.last_pay_day, opts.balance
-    )
+    margin, allocations = find_current_margin(budget, opts.last_pay_day, opts.balance)
     print_bill_allocations(budget.bills, allocations)
 
-    monthly_estimate = budget.estimate_monthly(bills_only=True)
-    print(f"Estimated Monthly Expenses: {monthly_estimate:7.2f}")
-    paycheck_estimate = budget.estimate_paycheck(
-        bills_only=False
-    )
-    print(f"Estimated Minimum Paycheck: {paycheck_estimate:7.2f}")
-    print(hrule(93))
-
+    print(hrule(40))
     data = [
-        ("+", "Current Balance", opts.balance),
-        ("-", "Minimum Balance", budget.minimum_balance),
-        ("-", "Allocated Total", sum(allocations))
+        ("Estimated Monthly Expenses", budget.estimate_monthly(bills_only=True)),
+        ("Estimated Minimum Paycheck", budget.estimate_paycheck()),
     ]
-    max_label_length = max(map(lambda d: len(d[1]), data))
-    for prefix, label, value in data:
-        print(f'{label.ljust(max_label_length)}: {prefix or " "}{value:7.2f}')
-    print(hrule(max_label_length + 10))
-    print(f"{'Margin'.ljust(max_label_length)}:  {margin:7.2f}")
+    print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
+
+    print(hrule(40))
+    data = [
+        ("Current Balance", opts.balance),
+        ("Minimum Balance", budget.minimum_balance),
+        ("Allocated Total", sum(allocations)),
+    ]
+    print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
+
+    print(hrule(40))
+    print(f"Margin {margin:7.2f}")
