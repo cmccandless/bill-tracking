@@ -195,7 +195,7 @@ def get_allocations(budget: Budget, last_pay_day: date) -> List[float]:
     today = date.today()
     tomorrow = today + timedelta(days=1)
     # yesterday = today - timedelta(days=1)
-    return [bill.needed_balance(tomorrow, last_pay_day) for bill in budget.bills]
+    return [bill.needed_balance(today, last_pay_day) for bill in budget.bills]
 
 
 def find_current_margin(
