@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from math import floor
 from pathlib import Path
-from typing import List, Dict
+import re
+from typing import List, Tuple
 import yaml
 
 from tabulate import tabulate
@@ -216,16 +217,38 @@ def manual_payment(text):
     return (name, float(amount))
 
 
+def t_reserve(s: str) -> Tuple[str, float]:
+    if m := re.match(r"^(?:(?P<name>[\w ]+)=)?(?P<amount>-?\d+(?:\.\d{2})?)$", s):
+        name = m.group("name")
+        if not name:
+            name = "[RESERVED]"
+        else:
+            name = f"[RESERVED] {name}"
+        amount = float(m.group("amount"))
+        return name, amount
+    raise ValueError(f"ERROR: NO MATCH: {s}")
+
+
+def apply_reservations(margin: float, allocations: List[float], reservations: List[Tuple[str, float]]):
+    allocations = allocations[:]
+    for _, reserved_amount in reservations:
+        margin -= reserved_amount
+        allocations.append(reserved_amount)
+    return margin, allocations
+
+
 if __name__ == "__main__":
     cli = argparse.ArgumentParser()
     cli.add_argument("last_pay_day", type=parse_date, help="(ex: YYYY/MM/DD)")
     cli.add_argument("balance", type=float, help="(ex: 1234.56)")
     cli.add_argument("--budget", type=Path, default=Path("budget.yml"))
     cli.add_argument("-p", "--paid", action="append", default=[])
+    cli.add_argument("-r", "--reserve", action="append", default=[], type=t_reserve, help=("ex: 59.99, Preorder=120"))
     opts = cli.parse_args()
     budget = Budget.load_from_file(opts.budget, opts.paid)
 
     margin, allocations = find_current_margin(budget, opts.last_pay_day, opts.balance)
+    margin, allocations = apply_reservations(margin, allocations, opts.reserve)
     print_bill_allocations(budget.bills, allocations)
 
     print(hrule(40))
@@ -239,6 +262,7 @@ if __name__ == "__main__":
     data = [
         ("Current Balance", opts.balance),
         ("Minimum Balance", budget.minimum_balance),
+        *opts.reserve,
         ("Allocated Total", sum(allocations)),
     ]
     print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
