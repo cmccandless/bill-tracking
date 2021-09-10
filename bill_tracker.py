@@ -120,6 +120,17 @@ class Bill:
             needed -= self.amount
         return needed
 
+@dataclass
+class ReservedItem:
+    amount: float
+    store: str = None
+    orderNo: str = None
+    description: str = None
+
+    @property
+    def as_tuple(self) -> Tuple[str, float]:
+        return (f'[RESERVED] {self.description}'.rstrip(), self.amount)
+
 
 @dataclass
 class Budget:
@@ -128,6 +139,7 @@ class Budget:
     pay_period_days: int = 14
     minimum_balance: float = 0
     paid: List[str] = None
+    reserved: List[ReservedItem] = None
 
     def __post_init__(self):
         for i, bill in enumerate(self.bills):
@@ -144,15 +156,24 @@ class Budget:
         for i, bill in enumerate(self.directdeposit):
             if isinstance(bill, dict):
                 self.directdeposit[i] = Bill(**bill)
+        if self.reserved is None:
+            self.reserved = []
+        else:
+            for i, reserved in enumerate(self.reserved):
+                if isinstance(reserved, dict):
+                    self.reserved[i] = ReservedItem(**reserved)
 
     @property
     def pay_period(self) -> timedelta:
         return timedelta(days=self.pay_period_days)
 
     @classmethod
-    def load_from_file(cls, budget_file: Path, paid: List[str]) -> "Budget":
+    def load_from_file(cls, budget_file: Path, paid: List[str], reserved: List[ReservedItem]) -> "Budget":
         with budget_file.open() as f:
-            return cls(paid=paid, **yaml.load(f, Loader=yaml.SafeLoader))
+            budget = cls(paid=paid, **yaml.load(f, Loader=yaml.SafeLoader))
+        for reserved_item in reserved:
+            budget.reserved.append(reserved_item)
+        return budget
 
     def estimate_paycheck(self, bills_only=False):
         bill_total = sum(
@@ -217,6 +238,18 @@ def manual_payment(text):
     return (name, float(amount))
 
 
+def t_reserve(s: str) -> ReservedItem:
+    if m := re.match(r"^(?:(?P<name>[\w ]+)=)?(?P<amount>-?\d+(?:\.\d{2})?)$", s):
+        amount = float(m.group('amount'))
+        name = m.group("name")
+        if not name:
+            item = ReservedItem(amount=amount)
+        else:
+            item = ReservedItem(amount=amount, description=name)
+        return item
+    raise ValueError(f"ERROR: NO MATCH: {s}")
+
+
 def t_reserve(s: str) -> Tuple[str, float]:
     if m := re.match(r"^(?:(?P<name>[\w ]+)=)?(?P<amount>-?\d+(?:\.\d{2})?)$", s):
         name = m.group("name")
@@ -229,11 +262,11 @@ def t_reserve(s: str) -> Tuple[str, float]:
     raise ValueError(f"ERROR: NO MATCH: {s}")
 
 
-def apply_reservations(margin: float, allocations: List[float], reservations: List[Tuple[str, float]]):
+def apply_reservations(margin: float, allocations: List[float], reservations: List[ReservedItem]):
     allocations = allocations[:]
-    for _, reserved_amount in reservations:
-        margin -= reserved_amount
-        allocations.append(reserved_amount)
+    for item in reservations:
+        margin -= item.amount
+        allocations.append(item.amount)
     return margin, allocations
 
 
@@ -245,10 +278,10 @@ if __name__ == "__main__":
     cli.add_argument("-p", "--paid", action="append", default=[])
     cli.add_argument("-r", "--reserve", action="append", default=[], type=t_reserve, help=("ex: 59.99, Preorder=120"))
     opts = cli.parse_args()
-    budget = Budget.load_from_file(opts.budget, opts.paid)
+    budget = Budget.load_from_file(opts.budget, opts.paid, opts.reserve)
 
     margin, allocations = find_current_margin(budget, opts.last_pay_day, opts.balance)
-    margin, allocations = apply_reservations(margin, allocations, opts.reserve)
+    margin, allocations = apply_reservations(margin, allocations, budget.reserved)
     print_bill_allocations(budget.bills, allocations)
 
     print(hrule(40))
@@ -262,7 +295,7 @@ if __name__ == "__main__":
     data = [
         ("Current Balance", opts.balance),
         ("Minimum Balance", budget.minimum_balance),
-        *opts.reserve,
+        *(r.as_tuple for r in budget.reserved),
         ("Allocated Total", sum(allocations)),
     ]
     print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
