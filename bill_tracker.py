@@ -250,18 +250,6 @@ def t_reserve(s: str) -> ReservedItem:
     raise ValueError(f"ERROR: NO MATCH: {s}")
 
 
-def t_reserve(s: str) -> Tuple[str, float]:
-    if m := re.match(r"^(?:(?P<name>[\w ]+)=)?(?P<amount>-?\d+(?:\.\d{2})?)$", s):
-        name = m.group("name")
-        if not name:
-            name = "[RESERVED]"
-        else:
-            name = f"[RESERVED] {name}"
-        amount = float(m.group("amount"))
-        return name, amount
-    raise ValueError(f"ERROR: NO MATCH: {s}")
-
-
 def apply_reservations(margin: float, allocations: List[float], reservations: List[ReservedItem]):
     allocations = allocations[:]
     for item in reservations:
