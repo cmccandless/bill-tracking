@@ -6,13 +6,14 @@ from datetime import date, datetime, timedelta
 from math import floor
 from pathlib import Path
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import yaml
 
 from tabulate import tabulate
 
 
 WEEKS_PER_YEAR = 52
+SALES_TAX = 1.07
 
 
 def parse_date(s: str) -> date:
@@ -120,12 +121,21 @@ class Bill:
             needed -= self.amount
         return needed
 
+
 @dataclass
 class ReservedItem:
     amount: float
     store: str = None
     orderNo: str = None
     description: str = None
+    addSalesTax: bool = False
+    group: str = None
+    quantity: int = 1
+
+    def __post_init__(self):
+        self.amount *= self.quantity
+        if self.addSalesTax:
+            self.amount *= SALES_TAX
 
     @property
     def as_tuple(self) -> Tuple[str, float]:
@@ -239,7 +249,7 @@ def manual_payment(text):
 
 
 def t_reserve(s: str) -> ReservedItem:
-    if m := re.match(r"^(?:(?P<name>[\w ]+)=)?(?P<amount>-?\d+(?:\.\d{2})?)$", s):
+    if m := re.match(r"^(?:(?P<name>[\w ]+)=)?(?P<amount>-?\d+(?:\.\d{1,2})?)$", s):
         amount = float(m.group('amount'))
         name = m.group("name")
         if not name:
@@ -256,6 +266,20 @@ def apply_reservations(margin: float, allocations: List[float], reservations: Li
         margin -= item.amount
         allocations.append(item.amount)
     return margin, allocations
+
+
+def group_reservations(reservations: List[ReservedItem]) -> List[Tuple[str, float]]:
+    ungrouped = []
+    groups: Dict[str, ReservedItem] = {}
+    for item in reservations:
+        if item.group is None:
+            ungrouped.append(item)
+        else:
+            if item.group not in groups:
+                groups[item.group] = ReservedItem(item.amount, description=f'{item.group} (Grouped)')
+            else:
+                groups[item.group].amount += item.amount
+    return [*ungrouped, *list(groups.values())]
 
 
 if __name__ == "__main__":
@@ -283,7 +307,7 @@ if __name__ == "__main__":
     data = [
         ("Current Balance", opts.balance),
         ("Minimum Balance", budget.minimum_balance),
-        *(r.as_tuple for r in budget.reserved),
+        *(r.as_tuple for r in group_reservations(budget.reserved)),
         ("Allocated Total", sum(allocations)),
     ]
     print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
