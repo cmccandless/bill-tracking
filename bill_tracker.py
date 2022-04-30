@@ -143,8 +143,8 @@ class Bill:
         total_pay_days_in_cycle = pay_days_since_last_payment + pay_days_until_due
         alloc_percent = pay_days_since_last_payment / total_pay_days_in_cycle
         needed = round(self.amount * alloc_percent, 2)
-        if self.paid_next and needed >= self.amount:
-            needed -= self.amount
+        # if self.paid_next and needed >= self.amount:
+        #     needed -= self.amount
         return needed
 
 
@@ -237,7 +237,11 @@ def format_billing_cycle(cycle: relativedelta):
         return 'Yearly'
     elif cycle == WEEKLY:
         return 'Weekly'
-    return f"Years={cycle.years} Months={cycle.months} Weeks={cycle.weeks}"
+    return " ".join(
+        f"{count} {label}"
+        for label, count in [("Years", cycle.years), ("Months", cycle.months), ("Weeks", cycle.weeks)]
+        if count != 0
+    )
 
 
 def print_bill_allocations(bills: List[Bill], allocations: List[float]):
