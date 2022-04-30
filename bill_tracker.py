@@ -70,6 +70,17 @@ def pay_days_until(until_date: date, last_pay_day: date, pay_period: timedelta=t
     return pay_days
 
 
+def is_pay_day(d: date, last_pay_day: date, pay_period: timedelta=timedelta(weeks=2)):
+    current = last_pay_day
+    if d < current:
+        while d < current:
+            current -= pay_period
+    else:
+        while current < d:
+            current += pay_period
+    return current == d
+
+
 @dataclass
 class Bill:
     name: str
@@ -139,6 +150,9 @@ class Bill:
         next_payment = last_payment + self.cycle
         needed = 0
         pay_days_since_last_payment = pay_days_since(last_payment, last_pay_day, pay_period)
+        # Do not double-count pay days
+        if is_pay_day(last_payment, last_pay_day, pay_period):
+            pay_days_since_last_payment -= 1
         pay_days_until_due = pay_days_until(next_payment, last_pay_day, pay_period)
         total_pay_days_in_cycle = pay_days_since_last_payment + pay_days_until_due
         alloc_percent = pay_days_since_last_payment / total_pay_days_in_cycle
