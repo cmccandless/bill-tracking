@@ -41,11 +41,12 @@ class BillingCycle(str, Enum):
 
 def t_timespan(x) -> relativedelta:
     if isinstance(x, str):
+        x = x.lower().strip()
         if x == 'weekly':
             return WEEKLY
         elif x == 'monthly':
             return MONTHLY
-        elif x == 'yearly':
+        elif x == 'yearly' or x == 'annual':
             return YEARLY
     elif isinstance(x, dict):
         return relativedelta(**x)
@@ -106,9 +107,12 @@ class Bill:
                 if today < self.lastPaid:
                     self.lastPaid -= relativedelta(years=+1)
             elif self.cycle == MONTHLY:
-                self.lastPaid = date(today.year, today.month, self.day)
-                if today < self.lastPaid:
-                    self.lastPaid -= relativedelta(months=+1)
+                try:
+                    self.lastPaid = date(today.year, today.month, self.day)
+                    if today < self.lastPaid:
+                        self.lastPaid -= relativedelta(months=+1)
+                except ValueError:
+                    self.lastPaid = date(today.year, today.month - 1, self.day)
             elif self.cycle == WEEKLY:
                 self.lastPaid = today
                 while self.lastPaid.weekday() != self.weekday:
@@ -146,6 +150,7 @@ class Bill:
     def needed_balance(
         self, on_day: date, last_pay_day: date, pay_period=timedelta(days=14)
     ) -> float:
+        # dbg(f"{self.name}.needed_balance({on_day},{last_pay_day},{pay_period}")
         last_payment = self.last_due_date(on_day)
         next_payment = last_payment + self.cycle
         needed = 0
@@ -155,8 +160,19 @@ class Bill:
             pay_days_since_last_payment -= 1
         pay_days_until_due = pay_days_until(next_payment, last_pay_day, pay_period)
         total_pay_days_in_cycle = pay_days_since_last_payment + pay_days_until_due
-        alloc_percent = pay_days_since_last_payment / total_pay_days_in_cycle
-        needed = round(self.amount * alloc_percent, 2)
+        # dbg(f"{self.name} pay days: {total_pay_days_in_cycle}")
+        # if total_pay_days_in_cycle == 0:
+        payments_before_pay_day = 0
+        current = last_payment + self.cycle
+        next_pay_day = last_pay_day + pay_period
+        while current < next_pay_day:
+            payments_before_pay_day += 1
+            current += self.cycle
+        if payments_before_pay_day > 1 or total_pay_days_in_cycle == 0:
+            needed = self.amount * payments_before_pay_day
+        else:
+            alloc_percent = pay_days_since_last_payment / total_pay_days_in_cycle
+            needed = round(self.amount * alloc_percent, 2)
         # if self.paid_next and needed >= self.amount:
         #     needed -= self.amount
         return needed
@@ -251,17 +267,27 @@ def format_billing_cycle(cycle: relativedelta):
         return 'Yearly'
     elif cycle == WEEKLY:
         return 'Weekly'
+
+    parts = {
+        "Years": cycle.years,
+        "Months": cycle.months
+    }
+    if cycle.days % 7 == 0:
+        parts["Weeks"] = cycle.weeks
+    else:
+        parts["Days"] = cycle.days
+
     return " ".join(
         f"{count} {label}"
-        for label, count in [("Years", cycle.years), ("Months", cycle.months), ("Weeks", cycle.weeks)]
-        if count != 0
-    )
+            for label, count in parts.items()
+            if count != 0
+        )
 
 
 def print_bill_allocations(bills: List[Bill], allocations: List[float]):
     today = date.today()
     tomorrow = today + timedelta(days=1)
-    headers = ["Bill", "Allocated", "Total", "Cycle", "Last Paid", "Next Due"]
+    headers = ["Bill", "Allocated", "$/Cycle", "Cycle", "Last Paid", "Next Due"]
     data = [
         (
             bill.name,
