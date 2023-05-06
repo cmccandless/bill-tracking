@@ -187,6 +187,7 @@ class ReservedItem:
     addSalesTax: bool = False
     group: str = None
     quantity: int = 1
+    preorder_date: parse_date = None
 
     def __post_init__(self):
         self.amount *= self.quantity
@@ -195,7 +196,13 @@ class ReservedItem:
 
     @property
     def as_tuple(self) -> Tuple[str, float]:
-        return (f'[RESERVED] {self.description}'.rstrip(), self.amount)
+        if self.preorder_date is not None:
+            desc = f'[PREORDERED {self.preorder_date}] {self.description}'
+        elif self.description is None:
+            desc = f'[RESERVED] (MANUAL)'
+        else:
+            desc = f'[RESERVED] {self.description}'
+        return (desc.rstrip(), self.amount)
 
 
 @dataclass
@@ -376,14 +383,15 @@ if __name__ == "__main__":
     margin, allocations = apply_reservations(margin, allocations, budget.reserved)
     print_bill_allocations(budget.bills, allocations)
 
-    print(hrule(40))
+    hrule_55 = hrule(55)
+    print(hrule_55)
     data = [
         ("Estimated Monthly Expenses", budget.estimate_monthly(bills_only=True)),
         ("Estimated Minimum Paycheck", budget.estimate_paycheck()),
     ]
     print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
 
-    print(hrule(40))
+    print(hrule_55)
     data = [
         ("Current Balance", opts.balance),
         ("Minimum Balance", budget.minimum_balance),
@@ -392,5 +400,5 @@ if __name__ == "__main__":
     ]
     print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
 
-    print(hrule(40))
+    print(hrule_55)
     print(f"Margin {margin:7.2f}")
