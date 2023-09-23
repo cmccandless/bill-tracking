@@ -9,7 +9,7 @@ from tkinter import filedialog
 
 # from tkinter import ttk
 
-from bill_tracker import Ledger, parse_date
+from bill_tracker import Ledger, parse_date, BudgetResults
 
 COLUMN_WIDTH = 20
 
@@ -22,18 +22,24 @@ check_recent = True
 
 
 class Table:
-    def __init__(self, root, data):
-        total_rows = len(data)
-        total_columns = len(data[0])
+    def __init__(self, parent, data):
+        self.parent = parent
+        self.data = data
+        self.total_rows = len(data)
+        self.total_columns = len(data[0])
+        self.table_frame = Frame(parent)
+
+    def pack(self):
+        self.table_frame.pack()
         # code for creating table
-        for i in range(total_rows):
-            for j in range(total_columns):
+        for i in range(self.total_rows):
+            for j in range(self.total_columns):
                 self.e = Entry(
-                    root, width=COLUMN_WIDTH, fg="blue", font=("Arial", 16, "bold")
+                    self.table_frame, width=COLUMN_WIDTH, fg="blue", font=("Arial", 16, "bold")
                 )
 
                 self.e.grid(row=i, column=j)
-                self.e.insert(END, data[i][j])
+                self.e.insert(END, self.data[i][j])
 
 
 class MainFrame(Frame):
@@ -53,12 +59,7 @@ class MainFrame(Frame):
     def report_callback_exception(self, exc, val, tb):
         messagebox.showerror("Error", message=str(val))
 
-    def calculate(self):
-        if self.results_frame is not None:
-            self.results_frame.pack_forget()
-        self.results_frame = Frame(self)
-        self.results_frame.pack()
-
+    def calculate_results(self):
         def paid_check_handler(
             bill_name: str, check_days: int, messagebox_parent=self.results_frame
         ) -> bool:
@@ -83,10 +84,34 @@ class MainFrame(Frame):
             balance = float(self.balance_entry.get())
         except ValueError:
             raise ValueError("Current balance is empty or invalid")
-        results = ledger.calculate(last_pay_day, balance, check_recent=check_recent)
+        return ledger.calculate(last_pay_day, balance, check_recent=check_recent)
 
+    def display_allocations_table(self, results: BudgetResults):
         data = results.get_allocations(include_headers=True)
         table = Table(self.results_frame, data)
+        table.pack()
+
+    def display_summary(self, results: BudgetResults):
+        summary_frame = Frame(self.results_frame)
+        summary_frame.pack()
+
+        rows = results.get_estimations()
+        rows.extend(results.get_summary())
+        rows.append(("Margin", results.margin))
+        for row_index, (label, value) in enumerate(rows):
+            Label(summary_frame, text=f"{label}: ").grid(column=0, row=row_index)
+            Label(summary_frame, text=f"{value:.2f}").grid(column=1, row=row_index)
+
+    def calculate(self):
+        if self.results_frame is not None:
+            self.results_frame.pack_forget()
+        self.results_frame = Frame(self)
+        self.results_frame.pack()
+        scrollbar = Scrollbar(self.results_frame)
+        scrollbar.pack(side=RIGHT, fill=Y)
+        results = self.calculate_results()
+        self.display_allocations_table(results)
+        self.display_summary(results)
 
     def set_budget_file(self):
         answer = filedialog.askopenfilename(
@@ -161,6 +186,7 @@ pos_x = (screen_width - app_width) // 2
 pos_y = (screen_height - app_height) // 2
 
 root.geometry(f"{app_width}x{app_height}+{pos_x}+{pos_y}")
+root.resizable(True, True)
 
 main_frame = MainFrame(root)
 root.mainloop()
