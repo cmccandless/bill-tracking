@@ -4,10 +4,11 @@ from enum import Enum
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
+import json
 from math import floor
 from pathlib import Path
 import re
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, MutableSet
 import yaml
 
 import sys
@@ -31,6 +32,46 @@ def dbg(msg, **kwargs):
 
 def parse_date(s: str) -> date:
     return datetime.strptime(s.replace('-', '/'), "%Y/%m/%d").date()
+
+
+class PaymentCache:
+    def __init__(self, payment_file: Path = Path("payments.json")):
+        self.payment_file = payment_file
+        self.payments: Dict[str, MutableSet[date]] = {}
+        self.load()
+
+    def load(self):
+        if self.payment_file.is_file():
+            with self.payment_file.open() as f:
+                safe = json.load(f)
+            self.payments = {
+                bill_name: {date.fromisoformat(payment) for payment in payments}
+                for bill_name, payments in safe.items()
+            }
+        else:
+            self.payments = {}
+
+    def save(self):
+        safe = {
+            bill_name: [payment.isoformat() for payment in payments]
+            for bill_name, payments in self.payments.items()
+        }
+        with self.payment_file.open('w') as f:
+            json.dump(safe, f)
+
+    def is_paid(self, bill_name: str, paid_date: date) -> bool:
+        if bill_name not in self.payments:
+            self.payments[bill_name] = set()
+        return paid_date in self.payments[bill_name]
+
+    def mark_paid(self, bill_name: str, paid_date: date):
+        if bill_name not in self.payments:
+            self.payments[bill_name] = set()
+        self.payments[bill_name].add(paid_date)
+        self.save()
+
+
+PAYMENT_CACHE = PaymentCache()
 
 
 class BillingCycle(str, Enum):
@@ -96,6 +137,7 @@ class Bill:
     notes: str = ""
 
     paid_next: bool = False
+    unpaid: bool = False
 
     def __post_init__(self):
         if not isinstance(self.cycle, relativedelta):
@@ -138,22 +180,39 @@ class Bill:
             next_due += self.cycle
         return next_due
 
-    def last_due_date(self, start_date: date) -> date:
+    def last_due_date(self, start_date: date, ignore_unpaid: bool = False) -> date:
         last_due = self.lastPaid
         while (last_due + self.cycle) < start_date:
             last_due += self.cycle
+        if self.unpaid and not ignore_unpaid:
+            last_due = self.last_due_date(last_due, True)
         return last_due
 
     def pay(self):
         self.paid_next = True
 
     def needed_balance(
-        self, on_day: date, last_pay_day: date, pay_period=timedelta(days=14)
+        self, on_day: date, last_pay_day: date, pay_period=timedelta(days=14), check=False
     ) -> float:
         # dbg(f"{self.name}.needed_balance({on_day},{last_pay_day},{pay_period}")
         last_payment = self.last_due_date(on_day)
         next_payment = last_payment + self.cycle
         needed = 0
+        recent_days = 3
+        if check and date.today() - last_payment <= timedelta(days=recent_days):
+            if PAYMENT_CACHE.is_paid(self.name, last_payment):
+                print(f'{self.name} marked as paid on {last_payment}')
+            else:
+                choice = input(f"Has {self.name} been paid in the last {recent_days} days (y/n, default:y)? ").lower()
+                if choice.startswith('n'):
+                    self.unpaid = True
+                    next_payment = last_payment
+                    last_payment -= self.cycle
+                    # known issue: if cycle < 3 days, this will be inaccurate
+                    return self.amount
+                    # needed += self.amount
+                else:
+                    PAYMENT_CACHE.mark_paid(self.name, last_payment)
         pay_days_since_last_payment = pay_days_since(last_payment, last_pay_day, pay_period)
         # Do not double-count pay days
         if is_pay_day(last_payment, last_pay_day, pay_period):
@@ -169,10 +228,10 @@ class Bill:
             payments_before_pay_day += 1
             current += self.cycle
         if payments_before_pay_day > 1 or total_pay_days_in_cycle == 0:
-            needed = self.amount * payments_before_pay_day
+            needed += self.amount * payments_before_pay_day
         else:
             alloc_percent = pay_days_since_last_payment / total_pay_days_in_cycle
-            needed = round(self.amount * alloc_percent, 2)
+            needed += round(self.amount * alloc_percent, 2)
         # if self.paid_next and needed >= self.amount:
         #     needed -= self.amount
         return needed
@@ -304,25 +363,27 @@ def print_bill_allocations(bills: List[Bill], allocations: List[float], sort_col
             bill.amount,
             format_billing_cycle(bill.cycle),
             bill.last_due_date(today),
+            "No" if bill.unpaid else "Yes",
             bill.next_due_date(tomorrow),
         )
         for bill, allocated in zip(bills, allocations)
     ]
-    data = sorted(data, key=lambda d: d[5])
-    print(tabulate(data, headers=headers, tablefmt="github", floatfmt=".2f"))
+    sort_index = COLUMNS.index(sort_column)
+    data = sorted(data, key=lambda d: d[sort_index], reverse=sort_descending)
+    print(tabulate(data, headers=COLUMNS, tablefmt="github", floatfmt=".2f"))
 
 
-def get_allocations(budget: Budget, last_pay_day: date) -> List[float]:
+def get_allocations(budget: Budget, last_pay_day: date, check: bool = False) -> List[float]:
     today = date.today()
     # tomorrow = today + timedelta(days=1)
     # yesterday = today - timedelta(days=1)
-    return [bill.needed_balance(today, last_pay_day) for bill in budget.bills]
+    return [bill.needed_balance(today, last_pay_day, check=check) for bill in budget.bills]
 
 
 def find_current_margin(
-    budget, last_pay_day: date, current_balance: float, round_margin=True
+    budget, last_pay_day: date, current_balance: float, round_margin=True, check=False
 ):
-    allocations = get_allocations(budget, last_pay_day)
+    allocations = get_allocations(budget, last_pay_day, check=check)
     total_allocated = sum(allocations)
     margin = current_balance - budget.minimum_balance - total_allocated
     if round_margin:
@@ -384,7 +445,7 @@ if __name__ == "__main__":
     opts = cli.parse_args()
     budget = Budget.load_from_file(opts.budget, opts.paid, opts.reserve)
 
-    margin, allocations = find_current_margin(budget, opts.last_pay_day, opts.balance)
+    margin, allocations = find_current_margin(budget, opts.last_pay_day, opts.balance, check=opts.check)
     margin, allocations = apply_reservations(margin, allocations, budget.reserved)
     print_bill_allocations(budget.bills, allocations, sort_column=opts.order, sort_descending=opts.desc)
 
