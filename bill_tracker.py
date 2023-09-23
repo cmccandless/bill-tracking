@@ -8,7 +8,7 @@ import json
 from math import floor
 from pathlib import Path
 import re
-from typing import List, Tuple, Dict, MutableSet
+from typing import List, Tuple, Dict, MutableSet, Callable
 import yaml
 
 import sys
@@ -27,11 +27,21 @@ SALES_TAX = 1.07
 
 
 def dbg(msg, **kwargs):
-    print(f'DEBUG: {msg}', **kwargs, file=sys.stderr)
+    print(f"DEBUG: {msg}", **kwargs, file=sys.stderr)
 
 
 def parse_date(s: str) -> date:
-    return datetime.strptime(s.replace('-', '/'), "%Y/%m/%d").date()
+    return datetime.strptime(s.replace("-", "/"), "%Y/%m/%d").date()
+
+
+PaidCheckHandler = Callable[[str, int], str]
+
+
+def default_paid_check_handler(bill_name: str, check_days: int) -> bool:
+    choice = input(
+        f"Has {bill_name} been paid in the last {check_days} days (y/n, default:y)? "
+    ).lower()
+    return choice.startswith("n")
 
 
 class PaymentCache:
@@ -56,7 +66,7 @@ class PaymentCache:
             bill_name: [payment.isoformat() for payment in payments]
             for bill_name, payments in self.payments.items()
         }
-        with self.payment_file.open('w') as f:
+        with self.payment_file.open("w") as f:
             json.dump(safe, f)
 
     def is_paid(self, bill_name: str, paid_date: date) -> bool:
@@ -83,18 +93,20 @@ class BillingCycle(str, Enum):
 def t_timespan(x) -> relativedelta:
     if isinstance(x, str):
         x = x.lower().strip()
-        if x == 'weekly':
+        if x == "weekly":
             return WEEKLY
-        elif x == 'monthly':
+        elif x == "monthly":
             return MONTHLY
-        elif x == 'yearly' or x == 'annual':
+        elif x == "yearly" or x == "annual":
             return YEARLY
     elif isinstance(x, dict):
         return relativedelta(**x)
     raise ValueError(f"ERROR: invalid timespan {x}")
 
 
-def pay_days_since(since_date: date, last_pay_day: date, pay_period: timedelta=timedelta(weeks=2)):
+def pay_days_since(
+    since_date: date, last_pay_day: date, pay_period: timedelta = timedelta(weeks=2)
+):
     pay_days = 0
     current = last_pay_day
     while since_date <= current:
@@ -103,7 +115,9 @@ def pay_days_since(since_date: date, last_pay_day: date, pay_period: timedelta=t
     return pay_days
 
 
-def pay_days_until(until_date: date, last_pay_day: date, pay_period: timedelta=timedelta(weeks=2)):
+def pay_days_until(
+    until_date: date, last_pay_day: date, pay_period: timedelta = timedelta(weeks=2)
+):
     pay_days = 0
     current = last_pay_day + pay_period
     while current < until_date:
@@ -112,7 +126,7 @@ def pay_days_until(until_date: date, last_pay_day: date, pay_period: timedelta=t
     return pay_days
 
 
-def is_pay_day(d: date, last_pay_day: date, pay_period: timedelta=timedelta(weeks=2)):
+def is_pay_day(d: date, last_pay_day: date, pay_period: timedelta = timedelta(weeks=2)):
     current = last_pay_day
     if d < current:
         while d < current:
@@ -160,12 +174,16 @@ class Bill:
                 while self.lastPaid.weekday() != self.weekday:
                     self.lastPaid -= relativedelta(days=+1)
             else:
-                raise ValueError(f"ERROR: Must provide lastBilled for irregular billing cycle ({self.name})")
+                raise ValueError(
+                    f"ERROR: Must provide lastBilled for irregular billing cycle ({self.name})"
+                )
         elif isinstance(self.lastPaid, str):
             self.lastPaid = parse_date(self.lastPaid)
 
     def per_paycheck_estimate(self, pay_period: timedelta):
-        paychecks_per_cycle = ((self.lastPaid + self.cycle) - self.lastPaid).days / pay_period.days
+        paychecks_per_cycle = (
+            (self.lastPaid + self.cycle) - self.lastPaid
+        ).days / pay_period.days
         return round(self.amount / paychecks_per_cycle, 2)
 
     def is_due(self, due_date: date) -> bool:
@@ -192,7 +210,12 @@ class Bill:
         self.paid_next = True
 
     def needed_balance(
-        self, on_day: date, last_pay_day: date, pay_period=timedelta(days=14), check=False
+        self,
+        on_day: date,
+        last_pay_day: date,
+        pay_period=timedelta(days=14),
+        check=False,
+        check_handler=None,
     ) -> float:
         # dbg(f"{self.name}.needed_balance({on_day},{last_pay_day},{pay_period}")
         last_payment = self.last_due_date(on_day)
@@ -201,19 +224,24 @@ class Bill:
         recent_days = 3
         if check and date.today() - last_payment <= timedelta(days=recent_days):
             if PAYMENT_CACHE.is_paid(self.name, last_payment):
-                print(f'{self.name} marked as paid on {last_payment}')
+                print(f"{self.name} marked as paid on {last_payment}")
             else:
-                choice = input(f"Has {self.name} been paid in the last {recent_days} days (y/n, default:y)? ").lower()
-                if choice.startswith('n'):
+                if check_handler is None:
+                    was_paid = default_paid_check_handler(self.name, recent_days)
+                else:
+                    was_paid = check_handler(self.name, recent_days)
+                if was_paid:
+                    PAYMENT_CACHE.mark_paid(self.name, last_payment)
+                else:
                     self.unpaid = True
                     next_payment = last_payment
                     last_payment -= self.cycle
                     # known issue: if cycle < 3 days, this will be inaccurate
                     return self.amount
                     # needed += self.amount
-                else:
-                    PAYMENT_CACHE.mark_paid(self.name, last_payment)
-        pay_days_since_last_payment = pay_days_since(last_payment, last_pay_day, pay_period)
+        pay_days_since_last_payment = pay_days_since(
+            last_payment, last_pay_day, pay_period
+        )
         # Do not double-count pay days
         if is_pay_day(last_payment, last_pay_day, pay_period):
             pay_days_since_last_payment -= 1
@@ -256,11 +284,11 @@ class ReservedItem:
     @property
     def as_tuple(self) -> Tuple[str, float]:
         if self.preorder_date is not None:
-            desc = f'[PREORDERED {self.preorder_date}] {self.description}'
+            desc = f"[PREORDERED {self.preorder_date}] {self.description}"
         elif self.description is None:
-            desc = f'[RESERVED] (MANUAL)'
+            desc = f"[RESERVED] (MANUAL)"
         else:
-            desc = f'[RESERVED] {self.description}'
+            desc = f"[RESERVED] {self.description}"
         return (desc.rstrip(), self.amount)
 
 
@@ -300,7 +328,9 @@ class Budget:
         return timedelta(days=self.pay_period_days)
 
     @classmethod
-    def load_from_file(cls, budget_file: Path, paid: List[str], reserved: List[ReservedItem]) -> "Budget":
+    def load_from_file(
+        cls, budget_file: Path, paid: List[str], reserved: List[ReservedItem]
+    ) -> "Budget":
         with budget_file.open() as f:
             budget = cls(paid=paid, **yaml.load(f, Loader=yaml.SafeLoader))
         for reserved_item in reserved:
@@ -328,62 +358,49 @@ def hrule(length):
 
 def format_billing_cycle(cycle: relativedelta):
     if cycle == MONTHLY:
-        return 'Monthly'
+        return "Monthly"
     elif cycle == YEARLY:
-        return 'Yearly'
+        return "Yearly"
     elif cycle == WEEKLY:
-        return 'Weekly'
+        return "Weekly"
 
-    parts = {
-        "Years": cycle.years,
-        "Months": cycle.months
-    }
+    parts = {"Years": cycle.years, "Months": cycle.months}
     if cycle.days % 7 == 0:
         parts["Weeks"] = cycle.weeks
     else:
         parts["Days"] = cycle.days
 
-    return " ".join(
-        f"{count} {label}"
-            for label, count in parts.items()
-            if count != 0
-        )
+    return " ".join(f"{count} {label}" for label, count in parts.items() if count != 0)
 
 
 COLUMNS = ["Bill", "Allocated", "$/Cycle", "Cycle", "Last Due", "Paid", "Next Due"]
 
 
-def print_bill_allocations(bills: List[Bill], allocations: List[float], sort_column: str = "Next Due", sort_descending: bool = False):
-    today = date.today()
-    tomorrow = today + timedelta(days=1)
-    data = [
-        (
-            bill.name,
-            allocated,
-            bill.amount,
-            format_billing_cycle(bill.cycle),
-            bill.last_due_date(today),
-            "No" if bill.unpaid else "Yes",
-            bill.next_due_date(tomorrow),
-        )
-        for bill, allocated in zip(bills, allocations)
-    ]
-    sort_index = COLUMNS.index(sort_column)
-    data = sorted(data, key=lambda d: d[sort_index], reverse=sort_descending)
-    print(tabulate(data, headers=COLUMNS, tablefmt="github", floatfmt=".2f"))
-
-
-def get_allocations(budget: Budget, last_pay_day: date, check: bool = False) -> List[float]:
+def get_allocations(
+    budget: Budget, last_pay_day: date, check: bool = False, check_handler=None
+) -> List[float]:
     today = date.today()
     # tomorrow = today + timedelta(days=1)
     # yesterday = today - timedelta(days=1)
-    return [bill.needed_balance(today, last_pay_day, check=check) for bill in budget.bills]
+    return [
+        bill.needed_balance(
+            today, last_pay_day, check=check, check_handler=check_handler
+        )
+        for bill in budget.bills
+    ]
 
 
 def find_current_margin(
-    budget, last_pay_day: date, current_balance: float, round_margin=True, check=False
+    budget,
+    last_pay_day: date,
+    current_balance: float,
+    round_margin=True,
+    check=False,
+    check_handler=None,
 ):
-    allocations = get_allocations(budget, last_pay_day, check=check)
+    allocations = get_allocations(
+        budget, last_pay_day, check=check, check_handler=check_handler
+    )
     total_allocated = sum(allocations)
     margin = current_balance - budget.minimum_balance - total_allocated
     if round_margin:
@@ -394,13 +411,13 @@ def find_current_margin(
 
 
 def manual_payment(text):
-    name, amount = text.split('=')
+    name, amount = text.split("=")
     return (name, float(amount))
 
 
 def t_reserve(s: str) -> ReservedItem:
     if m := re.match(r"^(?:(?P<name>[\w ]+)=)?(?P<amount>-?\d+(?:\.\d{1,2})?)$", s):
-        amount = float(m.group('amount'))
+        amount = float(m.group("amount"))
         name = m.group("name")
         if not name:
             item = ReservedItem(amount=amount)
@@ -410,7 +427,9 @@ def t_reserve(s: str) -> ReservedItem:
     raise ValueError(f"ERROR: NO MATCH: {s}")
 
 
-def apply_reservations(margin: float, allocations: List[float], reservations: List[ReservedItem]):
+def apply_reservations(
+    margin: float, allocations: List[float], reservations: List[ReservedItem]
+):
     allocations = allocations[:]
     for item in reservations:
         margin -= item.amount
@@ -426,10 +445,96 @@ def group_reservations(reservations: List[ReservedItem]) -> List[Tuple[str, floa
             ungrouped.append(item)
         else:
             if item.group not in groups:
-                groups[item.group] = ReservedItem(item.amount, description=f'{item.group} (Grouped)')
+                groups[item.group] = ReservedItem(
+                    item.amount, description=f"{item.group} (Grouped)"
+                )
             else:
                 groups[item.group].amount += item.amount
     return [*ungrouped, *list(groups.values())]
+
+
+@dataclass
+class BudgetResults:
+    budget: Budget
+    margin: float
+    allocations: List[float]
+
+    def get_allocations(
+        self,
+        sort_column: str = "Next Due",
+        sort_descending: bool = False,
+        include_headers=False,
+    ):
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+        data = [
+            (
+                bill.name,
+                allocated,
+                bill.amount,
+                format_billing_cycle(bill.cycle),
+                bill.last_due_date(today),
+                "No" if bill.unpaid else "Yes",
+                bill.next_due_date(tomorrow),
+            )
+            for bill, allocated in zip(self.budget.bills, self.allocations)
+        ]
+        sort_index = COLUMNS.index(sort_column)
+        data = sorted(data, key=lambda d: d[sort_index], reverse=sort_descending)
+        if include_headers:
+            data.insert(0, COLUMNS)
+        return data
+
+    def get_allocations_table(
+        self, sort_column: str = "Next Due", sort_descending: bool = False
+    ):
+        data = self.get_allocations(sort_column, sort_descending)
+        return tabulate(data, headers=COLUMNS, tablefmt="github", floatfmt=".2f")
+
+    def get_estimations(self):
+        data = [
+            (
+                "Estimated Monthly Expenses",
+                self.budget.estimate_monthly(bills_only=True),
+            ),
+            ("Estimated Minimum Paycheck", self.budget.estimate_paycheck()),
+        ]
+        return tabulate(data, floatfmt=".2f", tablefmt="plain")
+
+
+@dataclass
+class Ledger:
+    budget_file: Path
+    paid_bills: List[str] = None
+    reserved: List[str] = None
+    check_handler: PaidCheckHandler = None
+
+    def __post_init__(self):
+        if self.paid_bills is None:
+            self.paid_bills = []
+        if self.reserved is None:
+            self.reserved = []
+        self.budget = Budget.load_from_file(
+            self.budget_file, self.paid_bills, self.reserved
+        )
+
+    def calculate(
+        self,
+        last_pay_day: date,
+        balance: float,
+        check_recent: bool = False,
+    ) -> BudgetResults:
+        margin, allocations = find_current_margin(
+            self.budget,
+            last_pay_day,
+            balance,
+            check=check_recent,
+            check_handler=self.check_handler,
+        )
+        margin, allocations = apply_reservations(
+            margin, allocations, self.budget.reserved
+        )
+        return BudgetResults(self.budget, margin, allocations)
 
 
 if __name__ == "__main__":
@@ -438,33 +543,40 @@ if __name__ == "__main__":
     cli.add_argument("balance", type=float, help="(ex: 1234.56)")
     cli.add_argument("--budget", type=Path, default=Path("budget.yml"))
     cli.add_argument("-p", "--paid", action="append", default=[])
-    cli.add_argument("-r", "--reserve", action="append", default=[], type=t_reserve, help=("ex: 59.99, Preorder=120"))
-    cli.add_argument('-o', '--order', choices=COLUMNS, default="Next Due")
-    cli.add_argument('-d', '--desc', action="store_true", help="sort descending")
-    cli.add_argument("--no-check", action="store_false", help="verify recently due bills have been paid", dest="check")
+    cli.add_argument(
+        "-r",
+        "--reserve",
+        action="append",
+        default=[],
+        type=t_reserve,
+        help=("ex: 59.99, Preorder=120"),
+    )
+    cli.add_argument("-o", "--order", choices=COLUMNS, default="Next Due")
+    cli.add_argument("-d", "--desc", action="store_true", help="sort descending")
+    cli.add_argument(
+        "--no-check",
+        action="store_false",
+        help="verify recently due bills have been paid",
+        dest="check",
+    )
     opts = cli.parse_args()
-    budget = Budget.load_from_file(opts.budget, opts.paid, opts.reserve)
 
-    margin, allocations = find_current_margin(budget, opts.last_pay_day, opts.balance, check=opts.check)
-    margin, allocations = apply_reservations(margin, allocations, budget.reserved)
-    print_bill_allocations(budget.bills, allocations, sort_column=opts.order, sort_descending=opts.desc)
+    ledger = Ledger(opts.budget, opts.paid, opts.reserve)
+    results = ledger.calculate(opts.last_pay_day, opts.balance, check_recent=opts.check)
+    print(results.get_allocations_table(opts.order, opts.desc))
 
     hrule_55 = hrule(55)
     print(hrule_55)
-    data = [
-        ("Estimated Monthly Expenses", budget.estimate_monthly(bills_only=True)),
-        ("Estimated Minimum Paycheck", budget.estimate_paycheck()),
-    ]
-    print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
+    print(results.get_estimations())
 
     print(hrule_55)
     data = [
         ("Current Balance", opts.balance),
-        ("Minimum Balance", budget.minimum_balance),
-        *(r.as_tuple for r in group_reservations(budget.reserved)),
-        ("Allocated Total", sum(allocations)),
+        ("Minimum Balance", results.budget.minimum_balance),
+        *(r.as_tuple for r in group_reservations(results.budget.reserved)),
+        ("Allocated Total", sum(results.allocations)),
     ]
     print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
 
     print(hrule_55)
-    print(f"Margin {margin:7.2f}")
+    print(f"Margin {results.margin:7.2f}")
