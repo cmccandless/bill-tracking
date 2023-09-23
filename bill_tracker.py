@@ -291,10 +291,12 @@ def format_billing_cycle(cycle: relativedelta):
         )
 
 
-def print_bill_allocations(bills: List[Bill], allocations: List[float]):
+COLUMNS = ["Bill", "Allocated", "$/Cycle", "Cycle", "Last Due", "Paid", "Next Due"]
+
+
+def print_bill_allocations(bills: List[Bill], allocations: List[float], sort_column: str = "Next Due", sort_descending: bool = False):
     today = date.today()
     tomorrow = today + timedelta(days=1)
-    headers = ["Bill", "Allocated", "$/Cycle", "Cycle", "Last Paid", "Next Due"]
     data = [
         (
             bill.name,
@@ -376,12 +378,15 @@ if __name__ == "__main__":
     cli.add_argument("--budget", type=Path, default=Path("budget.yml"))
     cli.add_argument("-p", "--paid", action="append", default=[])
     cli.add_argument("-r", "--reserve", action="append", default=[], type=t_reserve, help=("ex: 59.99, Preorder=120"))
+    cli.add_argument('-o', '--order', choices=COLUMNS, default="Next Due")
+    cli.add_argument('-d', '--desc', action="store_true", help="sort descending")
+    cli.add_argument("--no-check", action="store_false", help="verify recently due bills have been paid", dest="check")
     opts = cli.parse_args()
     budget = Budget.load_from_file(opts.budget, opts.paid, opts.reserve)
 
     margin, allocations = find_current_margin(budget, opts.last_pay_day, opts.balance)
     margin, allocations = apply_reservations(margin, allocations, budget.reserved)
-    print_bill_allocations(budget.bills, allocations)
+    print_bill_allocations(budget.bills, allocations, sort_column=opts.order, sort_descending=opts.desc)
 
     hrule_55 = hrule(55)
     print(hrule_55)
