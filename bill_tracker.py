@@ -3,16 +3,30 @@ import argparse
 from enum import Enum
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from dateutil.relativedelta import relativedelta
 from math import floor
 from pathlib import Path
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import yaml
+
+import sys
 
 from tabulate import tabulate
 
 
+WEEKLY = relativedelta(weeks=+1)
+MONTHLY = relativedelta(months=+1)
+YEARLY = relativedelta(years=+1)
+
+
+MONTHS_PER_YEAR = 12
 WEEKS_PER_YEAR = 52
+SALES_TAX = 1.07
+
+
+def dbg(msg, **kwargs):
+    print(f'DEBUG: {msg}', **kwargs, file=sys.stderr)
 
 
 def parse_date(s: str) -> date:
@@ -25,11 +39,55 @@ class BillingCycle(str, Enum):
     Weekly = "weekly"
 
 
+def t_timespan(x) -> relativedelta:
+    if isinstance(x, str):
+        x = x.lower().strip()
+        if x == 'weekly':
+            return WEEKLY
+        elif x == 'monthly':
+            return MONTHLY
+        elif x == 'yearly' or x == 'annual':
+            return YEARLY
+    elif isinstance(x, dict):
+        return relativedelta(**x)
+    raise ValueError(f"ERROR: invalid timespan {x}")
+
+
+def pay_days_since(since_date: date, last_pay_day: date, pay_period: timedelta=timedelta(weeks=2)):
+    pay_days = 0
+    current = last_pay_day
+    while since_date <= current:
+        pay_days += 1
+        current -= pay_period
+    return pay_days
+
+
+def pay_days_until(until_date: date, last_pay_day: date, pay_period: timedelta=timedelta(weeks=2)):
+    pay_days = 0
+    current = last_pay_day + pay_period
+    while current < until_date:
+        pay_days += 1
+        current += pay_period
+    return pay_days
+
+
+def is_pay_day(d: date, last_pay_day: date, pay_period: timedelta=timedelta(weeks=2)):
+    current = last_pay_day
+    if d < current:
+        while d < current:
+            current -= pay_period
+    else:
+        while current < d:
+            current += pay_period
+    return current == d
+
+
 @dataclass
 class Bill:
     name: str
     amount: float
-    cycle: BillingCycle = BillingCycle.Monthly
+    cycle: relativedelta = relativedelta(months=+1)
+    lastPaid: datetime = None
 
     day: int = 1  # (1-31)
     weekday: int = 0  # (0-6) (Monday=0)
@@ -40,46 +98,51 @@ class Bill:
     paid_next: bool = False
 
     def __post_init__(self):
-        if isinstance(self.cycle, str):
-            self.cycle = BillingCycle(self.cycle)
+        if not isinstance(self.cycle, relativedelta):
+            self.cycle = t_timespan(self.cycle)
+        if self.lastPaid is None:
+            today = date.today()
+            if self.cycle == YEARLY:
+                self.lastPaid = date(today.year, self.month, self.day)
+                if today < self.lastPaid:
+                    self.lastPaid -= relativedelta(years=+1)
+            elif self.cycle == MONTHLY:
+                try:
+                    self.lastPaid = date(today.year, today.month, self.day)
+                    if today < self.lastPaid:
+                        self.lastPaid -= relativedelta(months=+1)
+                except ValueError:
+                    self.lastPaid = date(today.year, today.month - 1, self.day)
+            elif self.cycle == WEEKLY:
+                self.lastPaid = today
+                while self.lastPaid.weekday() != self.weekday:
+                    self.lastPaid -= relativedelta(days=+1)
+            else:
+                raise ValueError(f"ERROR: Must provide lastBilled for irregular billing cycle ({self.name})")
+        elif isinstance(self.lastPaid, str):
+            self.lastPaid = parse_date(self.lastPaid)
 
-    def per_paycheck_estimate(self, pay_period):
-        if self.cycle == BillingCycle.Monthly:
-            yearly_amount = self.amount * 12
-        elif self.cycle == BillingCycle.Weekly:
-            yearly_amount = self.amount * WEEKS_PER_YEAR
-        elif self.cycle == BillingCycle.Yearly:
-            yearly_amount = self.amount
-        else:
-            return 0
-        pay_period_weeks = pay_period.days / 7
-        pay_periods_per_year = WEEKS_PER_YEAR / pay_period_weeks
-        return yearly_amount / pay_periods_per_year
+    def per_paycheck_estimate(self, pay_period: timedelta):
+        paychecks_per_cycle = ((self.lastPaid + self.cycle) - self.lastPaid).days / pay_period.days
+        return round(self.amount / paychecks_per_cycle, 2)
 
     def is_due(self, due_date: date) -> bool:
-        if self.cycle == BillingCycle.Monthly:
-            return self.day == due_date.day
-        elif self.cycle == BillingCycle.Weekly:
-            return self.weekday == due_date.weekday()
-        elif self.cycle == BillingCycle.Yearly:
-            return self.day == due_date.day and self.month == due_date.month
-        return False
+        last_billed = self.lastPaid
+        while last_billed < due_date:
+            last_billed += self.cycle
+        return due_date == last_billed
 
     def next_due_date(self, start_date: date) -> date:
-        due_date = start_date
-        while not self.is_due(due_date):
-            due_date += timedelta(days=1)
-        if self.paid_next:
-            due_date += timedelta(days=1)
-            while not self.is_due(due_date):
-                due_date += timedelta(days=1)
-        return due_date
+        next_due = self.lastPaid
+        while next_due < start_date:
+            next_due += self.cycle
+        return next_due
 
     def last_due_date(self, start_date: date) -> date:
-        due_date = start_date
-        while not self.is_due(due_date):
-            due_date -= timedelta(days=1)
-        return due_date
+        last_due = self.lastPaid
+        while (last_due + self.cycle) < start_date:
+            last_due += self.cycle
+        return last_due
 
     def pay(self):
         self.paid_next = True
@@ -87,38 +150,33 @@ class Bill:
     def needed_balance(
         self, on_day: date, last_pay_day: date, pay_period=timedelta(days=14)
     ) -> float:
+        # dbg(f"{self.name}.needed_balance({on_day},{last_pay_day},{pay_period}")
         last_payment = self.last_due_date(on_day)
-        next_payment = self.next_due_date(on_day)
-        next_pay_day = last_pay_day + pay_period
+        next_payment = last_payment + self.cycle
         needed = 0
-        if self.cycle == BillingCycle.Monthly:
-            if last_payment > last_pay_day:
-                needed = 0
-            elif (next_payment - last_pay_day) < pay_period:
-                # due this pay period
-                needed = self.amount
-            else:
-                needed = round(self.amount / 2, 2)
-        elif self.cycle == BillingCycle.Weekly:
-            # one_week = timedelta(days=7)
-            if next_payment > next_pay_day:
-                needed = 0
-            elif last_payment < last_pay_day:
-                needed = self.amount * 2
-            return self.amount
-        elif self.cycle == BillingCycle.Yearly:
-            if last_payment > last_pay_day:
-                needed = 0
-            else:
-                amount_due = 0
-                day = last_pay_day
-                while day > last_payment:
-                    amount_due += self.amount / 26
-                    day -= pay_period
-                needed = round(amount_due, 2)
-        if self.paid_next and needed >= self.amount:
-            needed -= self.amount
+        pay_days_since_last_payment = pay_days_since(last_payment, last_pay_day, pay_period)
+        # Do not double-count pay days
+        if is_pay_day(last_payment, last_pay_day, pay_period):
+            pay_days_since_last_payment -= 1
+        pay_days_until_due = pay_days_until(next_payment, last_pay_day, pay_period)
+        total_pay_days_in_cycle = pay_days_since_last_payment + pay_days_until_due
+        # dbg(f"{self.name} pay days: {total_pay_days_in_cycle}")
+        # if total_pay_days_in_cycle == 0:
+        payments_before_pay_day = 0
+        current = last_payment + self.cycle
+        next_pay_day = last_pay_day + pay_period
+        while current < next_pay_day:
+            payments_before_pay_day += 1
+            current += self.cycle
+        if payments_before_pay_day > 1 or total_pay_days_in_cycle == 0:
+            needed = self.amount * payments_before_pay_day
+        else:
+            alloc_percent = pay_days_since_last_payment / total_pay_days_in_cycle
+            needed = round(self.amount * alloc_percent, 2)
+        # if self.paid_next and needed >= self.amount:
+        #     needed -= self.amount
         return needed
+
 
 @dataclass
 class ReservedItem:
@@ -126,10 +184,25 @@ class ReservedItem:
     store: str = None
     orderNo: str = None
     description: str = None
+    addSalesTax: bool = False
+    group: str = None
+    quantity: int = 1
+    preorder_date: parse_date = None
+
+    def __post_init__(self):
+        self.amount *= self.quantity
+        if self.addSalesTax:
+            self.amount *= SALES_TAX
 
     @property
     def as_tuple(self) -> Tuple[str, float]:
-        return (f'[RESERVED] {self.description}'.rstrip(), self.amount)
+        if self.preorder_date is not None:
+            desc = f'[PREORDERED {self.preorder_date}] {self.description}'
+        elif self.description is None:
+            desc = f'[RESERVED] (MANUAL)'
+        else:
+            desc = f'[RESERVED] {self.description}'
+        return (desc.rstrip(), self.amount)
 
 
 @dataclass
@@ -185,7 +258,7 @@ class Budget:
 
     def estimate_monthly(self, bills_only=False):
         paychecks_per_year = WEEKS_PER_YEAR / (self.pay_period_days / 7)
-        paychecks_per_month = paychecks_per_year / 12
+        paychecks_per_month = paychecks_per_year / MONTHS_PER_YEAR
         per_paycheck = self.estimate_paycheck(bills_only=bills_only)
         return per_paycheck * paychecks_per_month
 
@@ -194,16 +267,40 @@ def hrule(length):
     return "".join(["-"] * length)
 
 
+def format_billing_cycle(cycle: relativedelta):
+    if cycle == MONTHLY:
+        return 'Monthly'
+    elif cycle == YEARLY:
+        return 'Yearly'
+    elif cycle == WEEKLY:
+        return 'Weekly'
+
+    parts = {
+        "Years": cycle.years,
+        "Months": cycle.months
+    }
+    if cycle.days % 7 == 0:
+        parts["Weeks"] = cycle.weeks
+    else:
+        parts["Days"] = cycle.days
+
+    return " ".join(
+        f"{count} {label}"
+            for label, count in parts.items()
+            if count != 0
+        )
+
+
 def print_bill_allocations(bills: List[Bill], allocations: List[float]):
     today = date.today()
     tomorrow = today + timedelta(days=1)
-    headers = ["Bill", "Allocated", "Total", "Cycle", "Last Paid", "Next Due"]
+    headers = ["Bill", "Allocated", "$/Cycle", "Cycle", "Last Paid", "Next Due"]
     data = [
         (
             bill.name,
             allocated,
             bill.amount,
-            bill.cycle.name,
+            format_billing_cycle(bill.cycle),
             bill.last_due_date(today),
             bill.next_due_date(tomorrow),
         )
@@ -215,7 +312,7 @@ def print_bill_allocations(bills: List[Bill], allocations: List[float]):
 
 def get_allocations(budget: Budget, last_pay_day: date) -> List[float]:
     today = date.today()
-    tomorrow = today + timedelta(days=1)
+    # tomorrow = today + timedelta(days=1)
     # yesterday = today - timedelta(days=1)
     return [bill.needed_balance(today, last_pay_day) for bill in budget.bills]
 
@@ -239,7 +336,7 @@ def manual_payment(text):
 
 
 def t_reserve(s: str) -> ReservedItem:
-    if m := re.match(r"^(?:(?P<name>[\w ]+)=)?(?P<amount>-?\d+(?:\.\d{2})?)$", s):
+    if m := re.match(r"^(?:(?P<name>[\w ]+)=)?(?P<amount>-?\d+(?:\.\d{1,2})?)$", s):
         amount = float(m.group('amount'))
         name = m.group("name")
         if not name:
@@ -258,6 +355,20 @@ def apply_reservations(margin: float, allocations: List[float], reservations: Li
     return margin, allocations
 
 
+def group_reservations(reservations: List[ReservedItem]) -> List[Tuple[str, float]]:
+    ungrouped = []
+    groups: Dict[str, ReservedItem] = {}
+    for item in reservations:
+        if item.group is None:
+            ungrouped.append(item)
+        else:
+            if item.group not in groups:
+                groups[item.group] = ReservedItem(item.amount, description=f'{item.group} (Grouped)')
+            else:
+                groups[item.group].amount += item.amount
+    return [*ungrouped, *list(groups.values())]
+
+
 if __name__ == "__main__":
     cli = argparse.ArgumentParser()
     cli.add_argument("last_pay_day", type=parse_date, help="(ex: YYYY/MM/DD)")
@@ -272,21 +383,22 @@ if __name__ == "__main__":
     margin, allocations = apply_reservations(margin, allocations, budget.reserved)
     print_bill_allocations(budget.bills, allocations)
 
-    print(hrule(40))
+    hrule_55 = hrule(55)
+    print(hrule_55)
     data = [
         ("Estimated Monthly Expenses", budget.estimate_monthly(bills_only=True)),
         ("Estimated Minimum Paycheck", budget.estimate_paycheck()),
     ]
     print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
 
-    print(hrule(40))
+    print(hrule_55)
     data = [
         ("Current Balance", opts.balance),
         ("Minimum Balance", budget.minimum_balance),
-        *(r.as_tuple for r in budget.reserved),
+        *(r.as_tuple for r in group_reservations(budget.reserved)),
         ("Allocated Total", sum(allocations)),
     ]
     print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
 
-    print(hrule(40))
+    print(hrule_55)
     print(f"Margin {margin:7.2f}")
