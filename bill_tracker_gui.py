@@ -3,38 +3,38 @@ from pathlib import Path
 
 from tkinter import *
 from tkinter import messagebox
-from tkinter import simpledialog
+
+# from tkinter import simpledialog
 from tkinter import filedialog
+
 # from tkinter import ttk
 
 from bill_tracker import Ledger, parse_date
 
+COLUMN_WIDTH = 20
+
 # TODO: parameterize
 budget_file = Path("budget.yml")
-last_pay_day = date(2023,9,15)
+last_pay_day = date(2023, 9, 15)
 balance = 2564.6
 
 check_recent = True
 
 
-
 class Table:
-    def __init__(self,root,data):
+    def __init__(self, root, data):
         total_rows = len(data)
         total_columns = len(data[0])
         # code for creating table
         for i in range(total_rows):
             for j in range(total_columns):
-                 
                 self.e = Entry(
-                    root,
-                    width=20,
-                    fg='blue',
-                    font=('Arial',16,'bold')
+                    root, width=COLUMN_WIDTH, fg="blue", font=("Arial", 16, "bold")
                 )
-                 
+
                 self.e.grid(row=i, column=j)
                 self.e.insert(END, data[i][j])
+
 
 class MainFrame(Frame):
     def __init__(self, parent=None):
@@ -52,30 +52,29 @@ class MainFrame(Frame):
 
     def report_callback_exception(self, exc, val, tb):
         messagebox.showerror("Error", message=str(val))
-        
+
     def calculate(self):
         if self.results_frame is not None:
             self.results_frame.pack_forget()
         self.results_frame = Frame(self)
         self.results_frame.pack()
-        def paid_check_handler(bill_name: str, check_days: int, messagebox_parent=self.results_frame) -> bool:
+
+        def paid_check_handler(
+            bill_name: str, check_days: int, messagebox_parent=self.results_frame
+        ) -> bool:
             answer = messagebox.askyesno(
                 title="TBD",
                 message=f"Has {bill_name} been paid in the last {check_days} days?",
                 parent=messagebox_parent,
-                
             )
             if answer is None:
                 raise ValueError("operation was cancelled")
             return answer
-        
+
         if self.budget_file is None:
             raise ValueError("No budget file selected")
 
-        ledger = Ledger(
-            self.budget_file,
-            check_handler=paid_check_handler
-        )
+        ledger = Ledger(self.budget_file, check_handler=paid_check_handler)
         try:
             last_pay_day = parse_date(self.last_pay_day_entry.get())
         except ValueError:
@@ -84,11 +83,7 @@ class MainFrame(Frame):
             balance = float(self.balance_entry.get())
         except ValueError:
             raise ValueError("Current balance is empty or invalid")
-        results = ledger.calculate(
-            last_pay_day,
-            balance,
-            check_recent=check_recent
-        )
+        results = ledger.calculate(last_pay_day, balance, check_recent=check_recent)
 
         data = results.get_allocations(include_headers=True)
         table = Table(self.results_frame, data)
@@ -98,7 +93,7 @@ class MainFrame(Frame):
             parent=self,
             initialdir=Path.cwd(),
             title="Select budget.yml",
-            filetypes=[('YML files', '.yml .yaml'), ('all files', '.*')],
+            filetypes=[("YML files", ".yml .yaml"), ("all files", ".*")],
         )
         self.budget_file = Path(answer)
         self.budget_file_label.config(text=answer)
@@ -108,37 +103,55 @@ class MainFrame(Frame):
         # instead, call `winfo_toplevel to get the root window
         self.winfo_toplevel().title("Bill Tracker")
 
-        Label(self, text="budget.yml path:").pack()
-        self.budget_file_label = Label(self, text="")
-        self.budget_file_label.pack()
-        Button(self, text="Select budget.yml", command=self.set_budget_file).pack()
+        controls_frame = Frame(self)
+        controls_frame.pack()
+        controls = []
 
-        Label(self, text="Last Pay Day").pack()
-        self.last_pay_day_entry = Entry(self)
-        self.last_pay_day_entry.pack()
+        self.budget_file_label = Label(controls_frame, text="(none selected)")
+        controls.append(
+            (
+                Label(controls_frame, text="budget.yml path:"),
+                self.budget_file_label,
+                Button(
+                    controls_frame,
+                    text="Select budget.yml",
+                    command=self.set_budget_file,
+                ),
+            )
+        )
 
-        Label(self, text="Current Account Balance:").pack()
-        self.balance_entry = Entry(self)
-        self.balance_entry.pack()
-        # answer = simpledialog.askstring(
-        #     title="Last Pay Day",
-        #     prompt="(example: 2023/09/15)",
-        #     initialvalue="YYYY/MM/DD",
-        # )
-        # self.last_pay_day = parse_date(answer)
+        self.last_pay_day_entry = Entry(controls_frame)
+        controls.append(
+            (
+                Label(controls_frame, text="Last Pay Day"),
+                Label(controls_frame, text="(example: 2023/09/15)"),
+                self.last_pay_day_entry,
+            )
+        )
 
-        # self.balance = simpledialog.askfloat(
-        #     title="Current Balance",
-        #     prompt="example: 1234.56",
-        # )
+        self.balance_entry = Entry(controls_frame)
+        controls.append(
+            (
+                Label(controls_frame, text="Current Account Balance:"),
+                Label(controls_frame, text="(example: 1234.56)"),
+                self.balance_entry,
+            )
+        )
 
-        calc_button = Button(self, text="Calculate", command=self.calculate)
-        calc_button.pack()
+        controls.append(
+            (None, Button(controls_frame, text="Calculate", command=self.calculate))
+        )
+        self.bind("<Return>", self.calculate)
+
+        for row, control_group in enumerate(controls):
+            for column, control in enumerate(control_group):
+                if control is not None:
+                    control.grid(column=column, row=row)
 
 
 root = Tk()
 
-app_width = 1000
+app_width = 1920
 app_height = 1000
 
 screen_width = root.winfo_screenwidth()
@@ -150,5 +163,4 @@ pos_y = (screen_height - app_height) // 2
 root.geometry(f"{app_width}x{app_height}+{pos_x}+{pos_y}")
 
 main_frame = MainFrame(root)
-# main_frame.attributes("-topmost", 1)
 root.mainloop()

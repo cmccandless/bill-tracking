@@ -455,6 +455,7 @@ def group_reservations(reservations: List[ReservedItem]) -> List[Tuple[str, floa
 
 @dataclass
 class BudgetResults:
+    balance: float
     budget: Budget
     margin: float
     allocations: List[float]
@@ -499,6 +500,23 @@ class BudgetResults:
             ),
             ("Estimated Minimum Paycheck", self.budget.estimate_paycheck()),
         ]
+        return data
+
+    def get_estimations_table(self):
+        data = self.get_estimations()
+        return tabulate(data, floatfmt=".2f", tablefmt="plain")
+
+    def get_summary(self):
+        data = [
+            ("Current Balance", self.balance),
+            ("Minimum Balance", self.budget.minimum_balance),
+            *(r.as_tuple for r in group_reservations(self.budget.reserved)),
+            ("Allocated Total", sum(self.allocations)),
+        ]
+        return data
+
+    def get_summary_table(self):
+        data = self.get_summary()
         return tabulate(data, floatfmt=".2f", tablefmt="plain")
 
 
@@ -534,7 +552,7 @@ class Ledger:
         margin, allocations = apply_reservations(
             margin, allocations, self.budget.reserved
         )
-        return BudgetResults(self.budget, margin, allocations)
+        return BudgetResults(balance, self.budget, margin, allocations)
 
 
 if __name__ == "__main__":
@@ -570,13 +588,7 @@ if __name__ == "__main__":
     print(results.get_estimations())
 
     print(hrule_55)
-    data = [
-        ("Current Balance", opts.balance),
-        ("Minimum Balance", results.budget.minimum_balance),
-        *(r.as_tuple for r in group_reservations(results.budget.reserved)),
-        ("Allocated Total", sum(results.allocations)),
-    ]
-    print(tabulate(data, floatfmt=".2f", tablefmt="plain"))
+    print(results.get_summary_table())
 
     print(hrule_55)
     print(f"Margin {results.margin:7.2f}")
