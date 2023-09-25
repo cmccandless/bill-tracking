@@ -152,6 +152,7 @@ class Bill:
 
     paid_next: bool = False
     unpaid: bool = False
+    assumePaid: bool = False
 
     def __post_init__(self):
         if not isinstance(self.cycle, relativedelta):
@@ -225,6 +226,8 @@ class Bill:
         if check and date.today() - last_payment <= timedelta(days=recent_days):
             if PAYMENT_CACHE.is_paid(self.name, last_payment):
                 print(f"{self.name} marked as paid on {last_payment}")
+            elif self.assumePaid:
+                print(f"{self.name} assumed paid on {last_payment}")
             else:
                 if check_handler is None:
                     was_paid = default_paid_check_handler(self.name, recent_days)
