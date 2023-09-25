@@ -41,7 +41,7 @@ def default_paid_check_handler(bill_name: str, check_days: int) -> bool:
     choice = input(
         f"Has {bill_name} been paid in the last {check_days} days (y/n, default:y)? "
     ).lower()
-    return choice.startswith("n")
+    return not choice.startswith("n")
 
 
 class PaymentCache:
@@ -585,7 +585,7 @@ if __name__ == "__main__":
 
     hrule_55 = hrule(55)
     print(hrule_55)
-    print(results.get_estimations())
+    print(results.get_estimations_table())
 
     print(hrule_55)
     print(results.get_summary_table())
