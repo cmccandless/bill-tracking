@@ -38,9 +38,9 @@ def parse_date(s: str) -> date:
 PaidCheckHandler = Callable[[str, int], str]
 
 
-def default_paid_check_handler(bill_name: str, check_days: int) -> bool:
+def default_paid_check_handler(bill_name: str, amount: float, check_days: int) -> bool:
     choice = input(
-        f"Has {bill_name} been paid in the last {check_days} days (y/n, default:y)? "
+        f"Has {bill_name} (${amount:.2f}) been paid in the last {check_days} days (y/n, default:y)? "
     ).lower()
     return not choice.startswith("n")
 
@@ -195,9 +195,9 @@ class Bill:
                 print(f"{self.name} assumed paid on {last_payment}")
             else:
                 if check_handler is None:
-                    was_paid = default_paid_check_handler(self.name, check_days)
+                    was_paid = default_paid_check_handler(self.name, self.amount, check_days)
                 else:
-                    was_paid = check_handler(self.name, check_days)
+                    was_paid = check_handler(self.name, self.amount, check_days)
                 if was_paid:
                     PAYMENT_CACHE.mark_paid(self.name, last_payment)
                 else:

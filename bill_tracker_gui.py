@@ -61,11 +61,11 @@ class MainFrame(Frame):
 
     def calculate_results(self):
         def paid_check_handler(
-            bill_name: str, check_days: int, messagebox_parent=self.results_frame
+            bill_name: str, amount: float, check_days: int, messagebox_parent=self.results_frame
         ) -> bool:
             answer = messagebox.askyesno(
                 title="TBD",
-                message=f"Has {bill_name} been paid in the last {check_days} days?",
+                message=f"Has {bill_name} (${amount:.2f}) been paid in the last {check_days} days?",
                 parent=messagebox_parent,
             )
             if answer is None:
