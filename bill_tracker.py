@@ -181,23 +181,23 @@ class Bill:
         last_pay_day: date,
         pay_period=timedelta(days=14),
         check=False,
+        check_days=3,
         check_handler=None,
     ) -> float:
         # dbg(f"{self.name}.needed_balance({on_day},{last_pay_day},{pay_period}")
         last_payment = self.last_due_date(on_day)
         next_payment = last_payment + self.cycle
         needed = 0
-        recent_days = 3
-        if check and date.today() - last_payment <= timedelta(days=recent_days):
+        if check and date.today() - last_payment <= timedelta(days=check_days):
             if PAYMENT_CACHE.is_paid(self.name, last_payment):
                 print(f"{self.name} marked as paid on {last_payment}")
             elif self.assumePaid:
                 print(f"{self.name} assumed paid on {last_payment}")
             else:
                 if check_handler is None:
-                    was_paid = default_paid_check_handler(self.name, recent_days)
+                    was_paid = default_paid_check_handler(self.name, check_days)
                 else:
-                    was_paid = check_handler(self.name, recent_days)
+                    was_paid = check_handler(self.name, check_days)
                 if was_paid:
                     PAYMENT_CACHE.mark_paid(self.name, last_payment)
                 else:
@@ -362,14 +362,22 @@ COLUMNS = [
 
 
 def get_allocations(
-    budget: Budget, last_pay_day: date, check: bool = False, check_handler=None
+    budget: Budget,
+    last_pay_day: date,
+    check: bool = False,
+    check_days: int = 3,
+    check_handler=None,
 ) -> List[float]:
     today = date.today()
     # tomorrow = today + timedelta(days=1)
     # yesterday = today - timedelta(days=1)
     return [
         bill.needed_balance(
-            today, last_pay_day, check=check, check_handler=check_handler
+            today,
+            last_pay_day,
+            check=check,
+            check_days=check_days,
+            check_handler=check_handler,
         )
         for bill in budget.bills
     ]
@@ -381,10 +389,15 @@ def find_current_margin(
     current_balance: float,
     round_margin=True,
     check=False,
+    check_days=3,
     check_handler=None,
 ):
     allocations = get_allocations(
-        budget, last_pay_day, check=check, check_handler=check_handler
+        budget,
+        last_pay_day,
+        check=check,
+        check_days=check_days,
+        check_handler=check_handler,
     )
     total_allocated = sum(allocations)
     margin = current_balance - budget.minimum_balance - total_allocated
@@ -533,12 +546,14 @@ class Ledger:
         last_pay_day: date,
         balance: float,
         check_recent: bool = False,
+        check_days: int = 3,
     ) -> BudgetResults:
         margin, allocations = find_current_margin(
             self.budget,
             last_pay_day,
             balance,
             check=check_recent,
+            check_days=check_days,
             check_handler=self.check_handler,
         )
         margin, allocations = apply_reservations(
@@ -569,10 +584,16 @@ if __name__ == "__main__":
         help="verify recently due bills have been paid",
         dest="check",
     )
+    cli.add_argument("-n", "--check-days", type=int, default=3)
     opts = cli.parse_args()
 
     ledger = Ledger(opts.budget, opts.paid, opts.reserve)
-    results = ledger.calculate(opts.last_pay_day, opts.balance, check_recent=opts.check)
+    results = ledger.calculate(
+        opts.last_pay_day,
+        opts.balance,
+        check_recent=opts.check,
+        check_days=opts.check_days,
+    )
     print(results.get_allocations_table(opts.order, opts.desc))
 
     hrule_55 = hrule(55)
