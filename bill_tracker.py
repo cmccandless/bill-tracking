@@ -204,7 +204,7 @@ class Bill:
                     self.unpaid = True
                     next_payment = last_payment
                     last_payment -= self.cycle
-                    # known issue: if cycle < 3 days, this will be inaccurate
+                    # known issue: if cycle < check_days, this will be inaccurate
                     return self.amount
                     # needed += self.amount
         pay_days_since_last_payment = pay_days_since(
@@ -594,15 +594,18 @@ if __name__ == "__main__":
         check_recent=opts.check,
         check_days=opts.check_days,
     )
-    print(results.get_allocations_table(opts.order, opts.desc))
+    table = results.get_allocations_table(opts.order, opts.desc)
+    hrule_table = hrule(table.index("\n"))
+    print(hrule_table)
+    print(table)
 
-    hrule_55 = hrule(55)
-    print(hrule_55)
+    hrule_table = hrule_table
+    print(hrule_table)
     print(results.get_estimations_table(critical_only=True))
     print(results.get_estimations_table())
 
-    print(hrule_55)
+    print(hrule_table)
     print(results.get_summary_table())
 
-    print(hrule_55)
+    print(hrule_table)
     print(f"Margin {results.margin:7.2f}")
