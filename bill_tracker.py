@@ -113,6 +113,7 @@ class Bill:
     month: int = 1  # (1-12)
 
     notes: str = ""
+    critical: bool = False
 
     paid_next: bool = False
     unpaid: bool = False
@@ -308,18 +309,22 @@ class Budget:
             budget.reserved.append(reserved_item)
         return budget
 
-    def estimate_paycheck(self, bills_only=False):
+    def estimate_paycheck(self, bills_only=False, critical_only=False):
         bill_total = sum(
-            bill.per_paycheck_estimate(self.pay_period) for bill in self.bills
+            bill.per_paycheck_estimate(self.pay_period)
+            for bill in self.bills
+            if not critical_only or bill.critical
         )
         if bills_only:
             return bill_total
         return bill_total + sum(b.amount for b in self.directdeposit)
 
-    def estimate_monthly(self, bills_only=False):
+    def estimate_monthly(self, bills_only=False, critical_only=False):
         paychecks_per_year = WEEKS_PER_YEAR / (self.pay_period_days / 7)
         paychecks_per_month = paychecks_per_year / MONTHS_PER_YEAR
-        per_paycheck = self.estimate_paycheck(bills_only=bills_only)
+        per_paycheck = self.estimate_paycheck(
+            bills_only=bills_only, critical_only=critical_only
+        )
         return per_paycheck * paychecks_per_month
 
 
@@ -344,7 +349,16 @@ def format_billing_cycle(cycle: relativedelta):
     return " ".join(f"{count} {label}" for label, count in parts.items() if count != 0)
 
 
-COLUMNS = ["Bill", "Allocated", "$/Cycle", "Cycle", "Last Due", "Paid", "Next Due"]
+COLUMNS = [
+    "Bill",
+    "Critical",
+    "Allocated",
+    "$/Cycle",
+    "Cycle",
+    "Last Due",
+    "Paid",
+    "Next Due",
+]
 
 
 def get_allocations(
@@ -442,6 +456,7 @@ class BudgetResults:
         data = [
             (
                 bill.name,
+                "No" if bill.critical else "Yes",
                 allocated,
                 bill.amount,
                 format_billing_cycle(bill.cycle),
@@ -463,18 +478,24 @@ class BudgetResults:
         data = self.get_allocations(sort_column, sort_descending)
         return tabulate(data, headers=COLUMNS, tablefmt="github", floatfmt=".2f")
 
-    def get_estimations(self):
+    def get_estimations(self, critical_only=False):
+        modifier = "Critical" if critical_only else "Total"
         data = [
             (
-                "Estimated Monthly Expenses",
-                self.budget.estimate_monthly(bills_only=True),
+                f"Estimated {modifier} Monthly Expenses",
+                self.budget.estimate_monthly(
+                    bills_only=True, critical_only=critical_only
+                ),
             ),
-            ("Estimated Minimum Paycheck", self.budget.estimate_paycheck()),
+            (
+                f"Estimated {modifier} Minimum Paycheck",
+                self.budget.estimate_paycheck(critical_only=critical_only),
+            ),
         ]
         return data
 
-    def get_estimations_table(self):
-        data = self.get_estimations()
+    def get_estimations_table(self, critical_only=False):
+        data = self.get_estimations(critical_only=critical_only)
         return tabulate(data, floatfmt=".2f", tablefmt="plain")
 
     def get_summary(self):
@@ -556,6 +577,7 @@ if __name__ == "__main__":
 
     hrule_55 = hrule(55)
     print(hrule_55)
+    print(results.get_estimations_table(critical_only=True))
     print(results.get_estimations_table())
 
     print(hrule_55)
