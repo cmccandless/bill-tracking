@@ -21,11 +21,10 @@ from payment_cache import PaymentCache
 WEEKLY = relativedelta(weeks=+1)
 MONTHLY = relativedelta(months=+1)
 YEARLY = relativedelta(years=+1)
-
+DEFAULT_SALES_TAX = 0.07
 
 MONTHS_PER_YEAR = 12
 WEEKS_PER_YEAR = 52
-SALES_TAX = 1.07
 
 
 def dbg(msg, **kwargs):
@@ -243,11 +242,12 @@ class ReservedItem:
     group: str = None
     quantity: int = 1
     preorder_date: parse_date = None
+    sales_tax: float = DEFAULT_SALES_TAX
 
     def __post_init__(self):
         self.amount *= self.quantity
         if self.addSalesTax:
-            self.amount *= SALES_TAX
+            self.amount *= (1 + self.sales_tax)
 
     @property
     def as_tuple(self) -> Tuple[str, float]:
@@ -268,6 +268,7 @@ class Budget:
     minimum_balance: float = 0
     paid: List[str] = None
     reserved: List[ReservedItem] = None
+    sales_tax: float = DEFAULT_SALES_TAX
 
     def __post_init__(self):
         for i, bill in enumerate(self.bills):
@@ -289,6 +290,8 @@ class Budget:
         else:
             for i, reserved in enumerate(self.reserved):
                 if isinstance(reserved, dict):
+                    if "sales_tax" not in reserved:
+                        reserved["sales_tax"] = self.sales_tax
                     self.reserved[i] = ReservedItem(**reserved)
 
     @property
